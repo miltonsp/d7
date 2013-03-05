@@ -1,5 +1,6 @@
-; $Id
+; $Id:
 name = PPL Feeds
-description = "PPL Feeds"
-package = AETN Feeds
-core = 6.x
+description = " pulls PPL Feeds for TV Schedules"
+version = 7.1
+package = AETN FEEDS
+core = 7.x
