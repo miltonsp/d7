@@ -1,0 +1,7 @@
+; $Id: ssos_client_v2.info 130861 2012-02-17 16:20:29Z milton $
+name = SSOS Client V2
+description = Communicate with Lifetime SSOS User Database
+version = 7.1
+package = LifetimeTV
+core = 7.x
+

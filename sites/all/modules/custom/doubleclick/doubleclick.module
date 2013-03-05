@@ -1,0 +1,284 @@
+<?php
+// $Id: doubleclick.module 130853 2012-02-17 16:05:23Z milton $
+
+/**
+ * @file
+ * Enables the Doubleclick ad serving application.
+ */
+ 
+function doubleclick_permission() {
+  return array(
+    'administer doubleclick ads' => array(
+      'title' => t('Administer doubleclick ads'),
+      'restrict access' => TRUE,
+    ), 
+  ); 
+}
+
+function doubleclick_init() {
+  // we want to get the manager from the initial page load
+  require_once drupal_get_path('module', 'doubleclick') . '/models/Manager/DoubleClick.php';
+  $adManager = Manager_DoubleClick::singleton(); // we can't lazy load the manager, as some pages need the JS object but don't have any ads on the page
+
+  //  Load aetn_lib_ad.js which has the aetn.lib.ad.ifrmResize() function
+  drupal_add_js(drupal_get_path('module', 'doubleclick') . '/js/aetn_lib_ad.js');
+  drupal_add_js(
+  'aetn.lib.ad = new aetn.lib.Ad({' .
+  'interstitialVideoSwfUrl : "' . base_path() . drupal_get_path('module', 'doubleclick') . '/swf/interstitialPlayer.swf",'  . 
+  'interstitialDisplayAdIframeUrl: "' . base_path() . drupal_get_path('module', 'doubleclick') . '/templates/hybrid-iframe.html"' .
+  '});', 'inline', 'header');
+  
+  // lifestyle/entertainment HACK
+  $alias = drupal_get_path_alias($_GET['q']);
+  if(strpos($alias, 'lifestyle/') === 0) { // in lifestyle section
+    if(strpos($adManager->getSite(), '.myltv.other') !== FALSE) { // default site
+      $adManager->setSite(str_replace('.myltv.other', '.myltv.entertainment', $adManager->getSite()));
+    }
+    if(!$adManager->getZone1()) { // default zone
+      if(strpos($alias, 'beauty-style') == 10) $adManager->setZone1('style');
+      else $adManager->setZone1('lifestyle');
+    }
+  }
+}
+function doubleclick_menu() {
+  $items = array();
+  $items['admin/settings/js'] = array(
+    'page callback' => 'doubleclick_dimensions_js',
+    'access arguments' =>array('administer doubleclick ads'),
+    'file' => 'doubleclick.admin.inc',
+   
+  );
+  
+  // Override Service settings title -- originally set in system.module.
+  // Original 'title' => 'Web services',
+
+  // debug
+  // error_log("From " . basename(__FILE__). " line " .__LINE__. ":  \$items: " .  print_r($items, 1));
+
+  // Service settings.
+
+  $items['admin/config/services'] = array(
+    'title' => 'Services',
+    'description' => 'Tools related to extra services.',
+    'position' => 'right',
+    'weight' => 0,
+    'page callback' => 'system_admin_menu_block_page',
+    'access arguments' => array('access administration pages'),
+    'file' => 'system.admin.inc',
+    'file path' => drupal_get_path('module', 'system'),
+  );
+  
+  $items['admin/config/services/doubleclick'] = array(
+    'title'              => t('DoubleClick'),
+    'description'        => t('View and create doubleclick ad blocks.'),
+    'page callback'      => 'drupal_get_form',
+    'page arguments'     => array('doubleclick_create_ad'),
+    'access arguments'   => array('administer doubleclick ads'),
+    'file'               => 'doubleclick.admin.inc',
+  );
+  $items['admin/config/services/doubleclick/list'] = array(
+    'title'              => t('Ads'),
+    'page arguments'     => array('doubleclick_create_ad'),
+    'access arguments'   => array('administer doubleclick ads'),
+    'file'               => 'doubleclick.admin.inc',
+    'type'               => MENU_DEFAULT_LOCAL_TASK,
+  );
+  $items['admin/config/services/doubleclick/paths'] = array(
+    'title'              => t('Tags By URL'),
+    'description'        => t('View and create doubleclick ad tag definitions based on URL.'),
+    'page arguments'     => array('doubleclick_create_path'),
+    'access arguments'   => array('administer doubleclick ads'),
+    'file'               => 'doubleclick.admin.inc',
+    'type'               => MENU_LOCAL_TASK,
+  );
+  
+
+  return $items;
+}
+
+function doubleclick_block($op = 'list', $delta = 0, $edit = array()) {
+  switch($op) {
+    case 'list':
+      $rs = db_query('SELECT da.id, da.type, da.name, da.dimensions, da.pos
+              FROM {doubleclick_ads} da
+              ORDER BY da.id ASC',
+              array(),    // No placeholders
+              array(
+                'target' => 'slave',     // Use slave DB
+                'fetch' => PDO::FETCH_ASSOC,  // Fetch as a associative array
+              )
+            );
+      $return = array();
+      foreach ($rs as $row) {
+        $return[$row['id']] = array(
+          'info'=> 'DoubleClick ' . $row['name'],
+          'cache'=> BLOCK_NO_CACHE,
+        );
+      }
+      return $return;
+      break;
+
+    case 'view':
+      $tags = _doubleclick_default_tags();
+      // $row = db_fetch_array(db_query_slave('SELECT da.id, da.type, da.dimensions, da.pos, da.frequency, da.timing FROM {doubleclick_ads} da WHERE da.id = %d', $delta));
+
+      $row = db_query('SELECT da.id, da.type, da.dimensions, da.pos, da.frequency, da.timing
+               FROM {doubleclick_ads} da
+               WHERE da.id = :id',
+              array( ':id' => $delta),    
+              array(
+                'target' => 'slave',     // Use slave DB
+              )
+            )->fetchAssoc();
+
+      $return = array();
+      if($row) {
+        $ad = Manager_DoubleClick::getInstance($row['type']);
+        foreach(unserialize($row['dimensions']) as $v) $ad->addDimension($v[0], $v[1]);
+        if($row['pos']) $ad->setPos($row['pos']);
+        $ad_tags = _doubleclick_load_tag_by_ad($row['id']);
+        if($ad_tags) {
+          foreach($ad_tags as $k=>$v) {
+            if($k != 'id' && $v != '') {
+              call_user_func(array($ad, 'set' . strtoupper($k{0}) . substr($k, 1)), $v);
+            }
+          }
+        }
+        if($row['type'] == 'TimedIntervalHybrid'){
+        	$interval_ad['timedIntervalAdFrequency'] = $row['frequency']? $row['frequency'] : 10;
+        	$interval_ad['timedIntervalAdDuration'] = $row['timing']? $row['timing'] : 10;
+        	$interval_ad['timedIntervalAdWrapperDiv'] = 'timeinterval_ad_wrapper';
+        	$interval_ad['timedIntervalAdWrapperId'] = 'timeinterval_ad'; 
+			$interval_ad['galleryFrameAD'] = 'true';  			
+        	drupal_add_js($interval_ad, 'setting');      
+        }
+        Manager_DoubleClick::singleton()->register($ad);
+
+        $return['content'] = '<div id="doubleclick-'.$row['id'].'" class="doubleclick-ad">' . $ad . '</div>';
+      }
+      return $return;
+      break;
+    /*
+     * I could offer the tags as a configure option for the block
+     */
+  }
+}
+
+
+function _doubleclick_default_tags() {
+  // I should probably get this directly from the schema to keep it DRY
+  return array(
+    'site',
+    'zone1',
+    'zone2',
+    's1',
+    's2',
+    'pid',
+    'kw',
+    'game',
+    'show',
+    'sweeps',
+    'movie',
+    'ptype',
+    'cat',
+    'attributes',
+  );
+}
+
+function _doubleclick_load_tag($id) {
+  if(!$id) return FALSE;
+
+  // if($row = db_fetch_array(db_query_slave('SELECT * FROM {doubleclick_tags} WHERE id = %d', $id))){
+
+  if ($row = db_query('SELECT * FROM {doubleclick_tags}
+               WHERE id = :id',
+              array( ':id' => $id),    
+              array(
+                'target' => 'slave',     // Use slave DB
+              )
+            )->fetchAssoc()) {
+
+    $tag = array();
+    foreach(_doubleclick_default_tags() as $k) {
+      $tag[$k] = $row['t' . $k];
+    }
+    return $tag;
+  }
+
+  return FALSE;
+}
+
+function _doubleclick_load_tag_by_ad($ad) {
+  if(!$ad) return FALSE;
+
+  /*
+  $sql = 'SELECT dt.*
+    FROM {doubleclick_ads} da
+    INNER JOIN {doubleclick_tags} dt ON da.doubleclick_tags_id = dt.id
+    WHERE da.id = %d';
+
+  if($row = db_fetch_array(db_query_slave($sql, $ad))){
+  */
+
+  $sql = 'SELECT dt.*
+    FROM {doubleclick_ads} da
+    INNER JOIN {doubleclick_tags} dt ON da.doubleclick_tags_id = dt.id
+    WHERE da.id = :id';
+
+  if ($row = db_query($sql,
+              array( ':id' => $id),    
+              array(
+                'target' => 'slave',     // Use slave DB
+              )
+            )->fetchAssoc()) {
+
+    $tag = array();
+    foreach(_doubleclick_default_tags() as $k) {
+      $tag[$k] = $row['t' . $k];
+    }
+    return $tag;
+  }
+
+  return FALSE;
+}
+
+function _doubleclick_load_tag_by_path($path) {
+  if(!$path) return FALSE;
+
+  $sql = 'SELECT dt.*
+    FROM {doubleclick_paths} dp
+    INNER JOIN {doubleclick_tags} dt ON dp.doubleclick_tags_id = dt.id
+    WHERE ' . (is_numeric($path)? 'dp.id = :id': 'dp.path = :id');
+
+    // WHERE ' . (is_numeric($path)? 'dp.id = %d': 'dp.path = \'%s\'');
+
+  // if($row = db_fetch_array(db_query_slave($sql, $path))){
+
+  if ($row = db_query($sql,
+              array( ':id' => $path),    
+              array(
+                'target' => 'slave',     // Use slave DB
+              )
+            )->fetchAssoc()){
+
+    $tag = array();
+    foreach(_doubleclick_default_tags() as $k) {
+      $tag[$k] = $row['t' . $k];
+    }
+    return $tag;
+  }
+
+  return FALSE;
+}
+
+function doubleclick_preprocess_page(&$vars) {
+  drupal_add_js('
+  var Dart = ' . Manager_DoubleClick::singleton()->toJS() . ';
+  Dart.ord = Math.floor(Math.random() * 100000000);
+  Dart.tile = 0;
+  var DartPreprocess = DartPreprocess || {};  // Initiallize if not there
+  Dart.quantSegs = DartPreprocess.quantSegs;
+  ', 'inline', 'header');
+  $vars['scripts'] = drupal_get_js();
+}
+

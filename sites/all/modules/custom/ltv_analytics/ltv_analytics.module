@@ -1,0 +1,201 @@
+<?php
+// $Id: ltv_analytics.module 133654 2012-04-19 17:20:36Z milton $
+
+/**
+ * Helper module for Omniture Analytics implementation
+ * 
+ */
+
+// Global variables
+global $analytics;    // It's a global object containing all the omniture analytics info
+
+// Functions that provide additional functions to derive parameters
+// For ltv the include file required would be  ltv_analytics.helpers.myltv.inc
+$helper_file = dirname(__FILE__) . '/ltv_analytics.helpers.' . variable_get('site_short_name', '') . '.inc';
+if (file_exists($helper_file)) {
+  require $helper_file;
+} else {
+  // In case the custom file does not exist
+  require dirname(__FILE__) . '/ltv_analytics.helpers.inc';
+}
+
+/**
+ * Implementation of hook_init().
+ */
+
+function ltv_analytics_init() {
+
+  // Add Omniture event helper Javascript functions
+  drupal_add_js(drupal_get_path('module', 'ltv_analytics') . '/js/aetn_lib_analytics.js');
+  drupal_add_js('aetn.lib.analytics = aetn.lib.analytics || new aetn.lib.Analytics();', 'inline', 'header');
+    
+}
+
+/**
+ * Implementation of hook_perm().
+ */
+ 
+function ltv_analytics_perm() {
+  return array('administer ltv_analytics');
+}
+
+
+/**
+ * Implementation of hook_menu().
+ */
+
+function ltv_analytics_menu() {
+  $items = array();
+
+  return $items;
+}
+
+
+/**
+ * Menu callback; presents an overview of all paths.
+ */
+function ltv_analytics_admin() {
+  return ltv_analytics_overview();
+}
+
+/**
+ * Implementation of analytics_populate function
+ */
+function ltv_analytics_populate() {
+  global $analytics;    // It's a global object containing all the omniture analytics info
+  
+  // Check if $analytics is defined and if not create it
+  if (isset($analytics) || $analytics = new stdClass()) {};
+  
+  $prefix = variable_get('omniture_prefix', 'MYL:');   //  Prefix to identify source 
+  if (isset($analytics->prefix_sections) || $analytics->prefix_sections = array()) {};
+  $prefix_sections = $analytics->prefix_sections;    //  Sections which are prefixed for a given site -- see helpers file
+
+
+  $sep    = ':';      //  Separator
+  
+  // Set properties of $analytics object
+  if (count($prefix_sections)) {
+    $analytics->pageName = $prefix .  implode($sep, $prefix_sections) . $sep . ltv_analytics_getOmniturePageName();
+  } else {
+    $analytics->pageName = $prefix . ltv_analytics_getOmniturePageName();
+  }
+  $analytics->eVar49   = $prefix . ltv_analytics_getSiteSection(1);  
+  $analytics->eVar1    = (ltv_analytics_getSiteSection(2)) ? ($analytics->eVar49  . $sep . ltv_analytics_getSiteSection(2)) : '';
+  if(ltv_analytics_is_season_exist()){// If season exist in url
+    $analytics->eVar2    = (ltv_analytics_getSiteSection(3)) ? ($analytics->eVar1   . $sep . ltv_analytics_getSiteSection(4)) : '';
+    $analytics->eVar3    = (ltv_analytics_getSiteSection(5)) ? ($analytics->eVar2   . $sep . ltv_analytics_getSiteSection(5)) : 'None';
+    $analytics->eVar4    = (ltv_analytics_getSiteSection(6)) ? ($analytics->eVar3   . $sep . ltv_analytics_getSiteSection(6)) : 'None';
+  }else{
+    $analytics->eVar2    = (ltv_analytics_getSiteSection(3)) ? ($analytics->eVar1   . $sep . ltv_analytics_getSiteSection(3)) : '';
+    $analytics->eVar3    = (ltv_analytics_getSiteSection(4)) ? ($analytics->eVar2   . $sep . ltv_analytics_getSiteSection(4)) : '';
+    $analytics->eVar4    = (ltv_analytics_getSiteSection(5)) ? ($analytics->eVar3   . $sep . ltv_analytics_getSiteSection(5)) : '';
+  }
+
+  $analytics->eVar5    = ltv_analytics_getPageInfo("TVvsNonTV");
+  if (ltv_analytics_getSiteSection(1) == 'Shows')  $analytics->eVar5 = 'TV';
+  if (ltv_analytics_getSiteSection(1) == 'Movies') $analytics->eVar5 = 'TV';
+  // $analytics->eVar6    =  -- Genre --
+  if (ltv_analytics_getSiteSection(2)) {
+    $analytics->eVar7    = (ltv_analytics_getSiteSection(1) == 'Shows')  ? ($prefix . ltv_analytics_getSiteSection(2)) : '';
+    $analytics->eVar8    = (ltv_analytics_getSiteSection(1) == 'Movies') ? ($prefix . ltv_analytics_getSiteSection(2)) : ''; 
+  }
+  $analytics->eVar9    = ltv_analytics_getPageInfo("nodeType");
+
+  $analytics->eVar10   = (ltv_analytics_getCurrentPage()) ? ltv_analytics_getCurrentPage() : '1';
+  $analytics->eVar11   = ltv_analytics_getPageInfo("subTitle");
+  $analytics->eVar12   = isset($_SERVER['SCRIPT_URI']) ? $_SERVER['SCRIPT_URI'] : request_uri();    // request_uri(); // alternate will have query but no hostname
+  $analytics->eVar13   = ltv_analytics_getPageInfo("nodeID"); 
+  $analytics->eVar14   = $_SERVER['HTTP_HOST'];
+  // $analytics->eVar15   = 
+  // $analytics->eVar16   = 
+  // Special kludge for prop17 and prop18 (will be copied to eVar17 by s.code
+  $analytics->prop17   = ltv_analytics_getPageInfo("searchTerm"); 
+  // $analytics->prop18   = ltv_analytics_getPageInfo("searchTerm");
+  // $analytics->eVar19   = ltv_analytics_getPageInfo("searchTerm");
+ 
+
+  if(module_exists('doubleclick')) {
+    $analytics->eVar41   = Manager_DoubleClick::singleton()->getSite()  . ':' .
+              Manager_DoubleClick::singleton()->getZone1() . 
+              ((Manager_DoubleClick::singleton()->getZone2()) ? $sep : '') .
+              Manager_DoubleClick::singleton()->getZone2() ;
+  }
+
+  $analytics->campaign = ltv_analytics_get_uri("q=cmpid"); 
+
+  // $analytics->eVar10   = (ltv_analytics_getOmnitureeVar10()) ? ltv_analytics_getOmnitureeVar10() : "";
+  $analytics->eVar25   = isset($_GET['intcmp']) ? $_GET['intcmp'] : "";
+  $analytics->events   = ltv_analytics_getOmnitureEvent(); 
+
+  // Process error pages (404)
+  if ((module_exists('doubleclick') && Manager_DoubleClick::singleton()->getZone1() == 'error')
+      || $analytics->eVar11 == 'Page not found') {
+    // Blank out all variables
+    foreach ($analytics as $key => $value) {
+        if ($key == 'prefix_sections')  continue;     // Skip internal attributes
+	$analytics->$key = '';
+    }
+    $analytics->eVar9   = 'ErrorPage';  
+    $analytics->eVar49   = $prefix . 'ErrorPage';
+    $analytics->pageName = '';
+    $analytics->pageType = 'ErrorPage';
+  }
+  
+  // Invoke 'post_analytics' hook in all modules that implement it
+  // The hooks will modify the $analytics object
+  // They can modify or overwrite the $analytics->eVarxx values and should append to the 
+  //   $analytics->events property by appending values as a comma separated string.
+  //   e.g. in the aetn_sweeps module the hook function should be as follows:  
+  //   function aetn_sweeps_post_analytics(&$analytics) {....}
+
+  $function_list = module_invoke_all('post_analytics', $analytics);
+  // debug
+  // error_log("From " . basename(__FILE__). " line " .__LINE__. ":  \$function_list: " .  print_r($function_list, 1));
+
+}
+
+
+/**
+ * Return the Javascript set of s.variables for omniture
+ * use the global $analytics variable as the source
+ */
+
+function ltv_analytics_view() {
+  global $analytics;    // It's a global object containing all the omniture analytics info
+
+  // Check if $analytics is defined and if not create it
+  if (isset($analytics) || $analytics = new stdClass()) {};
+
+  $output = '';    // Output Javascript string
+
+  // Output as Javascript code
+  foreach ($analytics as $key => $value) {
+        if ($key == 'prefix_sections')  continue;     // Skip internal attributes
+        // Detect if we want to output Javascript code -- check $value if its prefixed with 'javascript:'
+        if (strtolower(substr($value, 0, 11)) == 'javascript:') {
+          $output .= "s.${key} = " . substr($value, 11) . "\n";
+          continue;
+        }
+        //  Change from $value of blank to 'None'
+        if ($value == '') {
+          $num = substr($key, 4);   // remove 'eVar' prefix
+          if (($num >= 1   && $num <= 14) ||
+              ($num >= 20  && $num <= 24)) {
+              $value = 'None';
+          }    
+        }
+        $value = check_plain($value);  // Prevent XSS attacks   
+	$output .= "s.${key} = \"$value\";\n" ;
+  }  
+  return $output;
+}
+/**
+ * ltv_analytics_is_season_exist()
+ * This function check URL if season exist in the url it will return TRUE otherwise FALSE
+ */
+ function ltv_analytics_is_season_exist(){
+   $url = ltv_analytics_get_uri('url');
+   $flag = preg_match("/season-\w/i",$url);
+   return $flag;
+ }

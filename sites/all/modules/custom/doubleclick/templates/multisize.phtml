@@ -1,0 +1,5 @@
+<script type="text/javascript">
+  // Dart comes from AdManager_DoubleClick::singleton();
+  var ad_path = escape('<?php print $site; ?>/<?php print $zone1; ?><?php print $zone2?'/'.$zone2:''; ?>;s1=<?php print $s1; ?>;s2=<?php print $s2; ?>;pid=<?php print $pid; ?>;kw=<?php print $kw; ?>;game=<?php print $game; ?>;sweeps=<?php print $sweeps; ?>;show=<?php print $show; ?>;movie=<?php print $movie; ?>;ptype=<?php print $ptype; ?>;cat=<?php print $cat; ?>;test=<?php print ($test == 'aetn.lib.ad.testLocation()') ? "' + aetn.lib.ad.testLocation() + '" : $test; ?>;aetn=<?php print $aetn; ?><?php print $attributes?';'.$attributes:''; ?>;pos=<?php print $pos; ?>;tile=' + (++Dart.tile) + (Dart.tile == 1? ';dcopt=ist': '') + ';sz=<?php print $sz; ?>;' + Dart.quantSegs);
+  document.write('<iframe id="ad_<?php print $width; ?>x<?php print $height; ?>_<?php print $pos; ?>_multisize" src="<?php print url(drupal_get_path('module', 'doubleclick')); ?>/templates/multisize-iframe.html?path=' + ad_path + '" frameborder="0" scrolling="no" allowtransparency="true" background-color="transparent" width="<?php print $width; ?>" height="<?php print $height; ?>"></iframe>');
+</script>

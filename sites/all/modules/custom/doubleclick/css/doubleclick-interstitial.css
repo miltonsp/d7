@@ -1,0 +1,67 @@
+/* $Id$ */
+
+/** 
+ * @file interstitial.css:  css file to support interstitial ads
+ */
+
+
+.black_overlay {
+    position: fixed;
+    _position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: black;
+    z-index: 1000001;
+    -moz-opacity: 0.8;
+    opacity: .80;
+    filter: alpha(opacity = 80);
+}
+.interstitialVideoAdWrapper{
+    position: fixed;
+    _position: absolute;
+    top: 5%;
+    left: 0;
+    width: 100%;
+    z-index: 1000002;
+    
+}
+.interstitial{
+    width: 624px;
+    padding: 0px 16px 16px 16px;
+    border: 16px solid grey;
+    overflow: auto;
+    margin:auto;
+    text-align:center;
+    background-color: #000000;
+    
+}
+.interstitial_display {
+	width: 300px;
+	overflow: auto;
+    margin:auto;
+    text-align:center;
+    padding:0 14px 14px;
+    border: 8px solid grey;
+    background-color: #000000;
+}
+
+.interstitial #interstitialAdLabel {
+	display: none;
+}
+.interstitialAdText{
+	color:#F0F0F0;
+	font-size:9pt;
+	line-height:14px;
+}
+#interstitialAdCloseButton{
+    cursor:pointer;
+	float: right;
+    visibility:hidden;
+}
+#interstitialAdLabel{
+float: left;
+	}
+
+

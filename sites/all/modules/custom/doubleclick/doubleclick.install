@@ -1,0 +1,60 @@
+<?php
+//  $Id: doubleclick.install 130862 2012-02-17 16:22:40Z milton $
+function doubleclick_schema() {
+  return array(
+    'doubleclick_ads'=> array(
+      'description'=> 'This table contains the ad definitions that proved blocks.',
+      'fields'=> array(
+        'id'                  => array('type'=> 'serial', 'unsigned'=> TRUE, 'not null'=> TRUE),
+        'type'                => array('type'=> 'varchar', 'length'=> 25, 'not null'=> TRUE, 'default'=> ''),
+        'name'                => array('type'=> 'varchar', 'length'=> 64, 'not null'=> TRUE, 'default'=> ''),
+        'dimensions'          => array('type'=> 'varchar', 'length'=> 255, 'not null'=> TRUE, 'default'=> ''),
+        'pos'                 => array('type'=> 'varchar', 'length'=> 16, 'not null'=> TRUE, 'default'=> ''),
+        'frequency'           => array('type'=> 'varchar', 'length'=> 16, 'not null'=> TRUE, 'default'=> ''),
+        'timing'              => array('type'=> 'varchar', 'length'=> 16, 'not null'=> TRUE, 'default'=> ''),
+        'doubleclick_tags_id' => array('type'=> 'int', 'unsigned'=> TRUE, 'not null'=> TRUE, 'default'=> 0),
+      ),
+      'primary key'=> array('id'),
+    ),
+    'doubleclick_paths'=> array(
+      'description'=> 'This table contains a reference to a path and associates a tag definition globally to that path.',
+      'fields'=> array(
+        'id'                  => array('type'=> 'serial', 'unsigned'=> TRUE, 'not null'=> TRUE),
+        'path'                => array('type'=> 'varchar', 'length'=> 255, 'not null'=> TRUE, 'default'=> ''),
+        'doubleclick_tags_id' => array('type'=> 'int', 'unsigned'=> TRUE, 'not null'=> TRUE, 'default'=> 0),
+      ),
+      'primary key'=> array('id'),
+      'unique key'=> array('path'=> array('path')),
+    ),
+    'doubleclick_tags'=> array(
+      'description'=> 'This table contains doubleclick tag definitions.',
+      'fields'=> array(
+        'id'                  => array('type'=> 'serial', 'unsigned'=> TRUE, 'not null'=> TRUE),
+        'tsite'                => array('type'=> 'varchar', 'length'=> 255, 'not null'=> TRUE, 'default'=> ''),
+        'tzone1'               => array('type'=> 'varchar', 'length'=> 255, 'not null'=> TRUE, 'default'=> ''),
+        'tzone2'               => array('type'=> 'varchar', 'length'=> 255, 'not null'=> TRUE, 'default'=> ''),
+        'ts1'                  => array('type'=> 'varchar', 'length'=> 255, 'not null'=> TRUE, 'default'=> ''),
+        'ts2'                  => array('type'=> 'varchar', 'length'=> 255, 'not null'=> TRUE, 'default'=> ''),
+        'tpid'                 => array('type'=> 'varchar', 'length'=> 255, 'not null'=> TRUE, 'default'=> ''),
+        'tkw'                  => array('type'=> 'varchar', 'length'=> 255, 'not null'=> TRUE, 'default'=> ''),
+        'tgame'                => array('type'=> 'varchar', 'length'=> 255, 'not null'=> TRUE, 'default'=> ''),
+        'tshow'                => array('type'=> 'varchar', 'length'=> 255, 'not null'=> TRUE, 'default'=> ''),
+        'tsweeps'              => array('type'=> 'varchar', 'length'=> 255, 'not null'=> TRUE, 'default'=> ''),
+        'tmovie'               => array('type'=> 'varchar', 'length'=> 255, 'not null'=> TRUE, 'default'=> ''),
+        'tptype'               => array('type'=> 'varchar', 'length'=> 255, 'not null'=> TRUE, 'default'=> ''),
+        'tcat'                 => array('type'=> 'varchar', 'length'=> 255, 'not null'=> TRUE, 'default'=> ''),
+        'tattributes'          => array('type'=> 'varchar', 'length'=> 255, 'not null'=> TRUE, 'default'=> ''),
+      ),
+      'primary key'=> array('id'),
+    ),
+  );
+}
+
+function doubleclick_install() {
+  drupal_install_schema('doubleclick');
+}
+
+
+function doubleclick_uninstall() {
+  drupal_uninstall_schema('doubleclick');
+}

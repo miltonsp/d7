@@ -1,0 +1,6 @@
+; $Id$
+name = LTV Login
+description = "Login ajax support"
+version = 7.0x
+package = LifetimeTV
+core = 7.x

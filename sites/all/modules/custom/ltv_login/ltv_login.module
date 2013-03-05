@@ -1,0 +1,249 @@
+<?php
+// $Id$
+// This module is temporary and should be replaced to handle the ajax login
+
+/**
+ * Implementation of hook_init
+ *
+ *  Initiallize global variable: $link_community_redirec
+ */
+function ltv_login_init() {
+// Read a variable to determine community redirect
+  global $link_community_redirect;
+  global $user_edit_link;
+  global $user;
+  
+  $link_community_redirect = variable_get('link_community_redirect', 'http://www.mylifetime.com/community');
+  // Note change of '$user->uid'  to '$user->name'
+  if ($link_community_redirect) {
+    $user_edit_link = $link_community_redirect . '/user'.($user->uid>0?'/'.$user->name . '/edit':'');
+  } else  {
+    $user_edit_link = 'user'.($user->uid>0?'/'.$user->uid . '/edit':'');
+  }
+
+
+  // drupal_add_js('misc/jquery.dimensions.js','module','header');
+  // drupal_add_js(drupal_get_path('module', 'ltv_login') . '/js/ltv_login.js');
+
+  // debug
+  //error_log("From " . basename(__FILE__). " line " .__LINE__. ":  \$_GET['q']: " .  print_r($_GET['q'], 1));
+  
+  // socialize code
+  // if('logout' == $_GET['q']) 
+  // Because logout is prefixed with either d6/, /movies, /shows, etc, we need to do a match on the suffix 'logout'
+  if (preg_match("/logout$/", $_GET['q'])) {
+    global $cookie_domain;
+    setcookie('aetn.user', FALSE, time() - 3600, '/', $cookie_domain);
+    setcookie('aetn.socialize.logout', '1', null, '/', $cookie_domain);
+
+    // Preload user.pages.inc for 'user_pass' to load. The 'menu' has it as 'file' type so it loads there
+    module_load_include('inc', 'user', 'user.pages'); 
+    $host_server = "http://".$_SERVER['HTTP_HOST'];
+
+    // Check if 'ssos_client_v2' module has been loaded
+    if (function_exists('ssos_client_v2_user_logout')) {
+      ssos_client_v2_user_logout($host_server);  // Does a full logout and cookie deletions
+    } else {
+      user_logout();   // in user.pages.inc
+    }  
+  
+    /*  Not needed -- its done in ssos_client_v2_user_logout()
+    // Destroy all cookies from previous session
+    $cookies = array('SESS'. md5($cookie_domain), $conf['site_short_name'] . 'status', 'loginstatus', 'lo', 'de', 'qa', 'co');
+    foreach ($cookies as $cookie) {
+      setcookie($cookie, '', time()-42000, '/', $cookie_domain);
+    }
+    */
+  }
+}
+
+/**
+ * Implementation of hook_perm().
+ */
+ 
+function ltv_login_perm() {
+  return array('administer ltv_login');
+}
+
+/**
+ * Implementation of hook_menu().
+ */
+function ltv_login_menu() {
+  $items = array();
+
+  $items['ltv_login/ajax/%/%'] = array(
+    'title'  =>  'Login Ajax requestor',
+    'page callback'  => 'ltv_login_ajax',
+    'page arguments' => array(2, 3),   // Pass along second and third arguments
+    'access callback' => TRUE,
+    'access arguments'    => TRUE,
+    'type'        => MENU_CALLBACK,
+  );
+
+  // This path entry is only needed in the 'ssos' server. It's there to make this module also operational when mounted on the 'ssos' server.
+  // This path entry is not used in the mylifetime.com D6 install. The d6/ gets filtered out by the d6 install.
+  $items['d6/ltv_login/ajax/%/%'] = $items['ltv_login/ajax/%/%'];
+  $items['d6/ltv_login/ajax/%/%']['page arguments'] = array(3, 4);   // Pass along second and third arguments
+  /*  Above implements the following menu entry
+  $items['d6/ltv_login/ajax/%/%'] = array(
+    'title'  =>  'Login Ajax requestor',
+    'page callback'  => 'ltv_login_ajax',
+    'page arguments' => array(3, 4),   // Pass along second and third arguments
+    'access callback' => TRUE,
+    'access arguments'    => TRUE,
+    'type'        => MENU_CALLBACK,
+  );
+  */
+
+  // For future use
+  $items['admin/config/people/ltv_login'] = array(
+    'title' => t('LTV Login'),
+    'description' => t('Configure login/logout related functionality.'),
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('ltv_login_admin_settings'),
+    'access callback' => 'user_access',
+    'access arguments' => array('administer ltv_login'),
+    );
+  
+  return $items;
+}
+
+
+function ltv_login_admin_settings() {
+   // Not implemented --  just a sample 
+   $form['email_override'] = array(
+    '#type' => 'fieldset',
+    '#title' => t('For Future use. Sample, placeholder.'),
+    '#weight' => 5,
+    '#collapsible' => FALSE,
+    '#collapsed' => FALSE,
+    '#description' => t('To preview e-mails from being sent to users while developing, testing or debugging, QAing, enable and set the address that all messages will be sent to.'),
+  );
+  $form['email_override']['ltv_user_admin_email_override'] = array(
+    '#type' => 'checkbox',
+    '#title' => t('For Future use. Enable administrative e-mail override'),
+    '#default_value' => variable_get('ltv_user_admin_email_override', 0),
+    '#description' => t('Check to disable messages from going to users and have them redirected to the address below.'),
+  );
+  $form['email_override']['ltv_user_admin_email_address'] = array(
+    '#type' => 'textfield',
+    '#title' => t('E-mail address'),
+    '#default_value' => variable_get('ltv_user_admin_email_address', ""),
+    '#size' => 60,
+    '#maxlength' => 128,
+    '#required' => TRUE,
+    '#description' => t('This is the address that ALL e-mail correspondences will be sent to'),
+  );
+  return system_settings_form($form);
+  
+}
+
+
+function ltv_login_ajax($op='') {
+  $return = NULL;
+  
+  if('form' == $op) {
+    $form_id = func_get_arg(1);
+    if('user_login' == $form_id || 'user_pass' == $form_id) {
+      $return = new stdClass();
+      // this callback is just for processing forms, not retrieving them
+      if(!isset($_POST) || count($_POST) == 0) {
+        $return->status = 'error';
+        $return->data = new stdClass();
+        $return->messages = 'Invalid request.';
+      } else {
+
+        $form_state = array();
+        $form_state['values'] = $_POST;
+        // $form_state['values']['name']    = $_POST['name'];
+        // $form_state['values']['pass']    = $_POST['pass'];
+
+        // Important
+        // The $form_state['post'] needs to be set -- Otherwise ssos_client will not alter the user-login, user_register , user_pass and other forms
+        $form_state['post'] = $_POST;
+
+        // debug
+        // error_log("From " . basename(__FILE__). " line " .__LINE__. ":  \$form_state: " .  print_r($form_state, 1));
+        
+        drupal_form_submit($form_id, $form_state);
+        
+        // debug
+        if (form_get_errors()) {
+           // echo "Errors encountered!<br />";
+           // print_r(form_get_errors());
+           // error_log("From ltv_login.module (line 161): ] \form_get_errors(): " . print_r(form_get_errors(), 1));
+           // $title = "Thank you.";
+           // $body = "Info only, Errors encountered!. Your password has not been sent to your registered e-mail address.";
+                   
+        } else {
+          // debug
+          // error_log("From ltv_login.module (line 167): ] \form_get_errors(): " . print_r("No errors:", 1));
+          // $title = "Thank you.";
+          // $body = "Your password and further instructions have been sent to your registered e-mail address.";
+        }
+        
+        
+        $messages = drupal_get_messages(NULL, TRUE);
+        if(isset($messages['error']) && is_array($messages['error']) && count($messages['error']) > 0) {
+          $return->status = 'error';
+          $return->data = new stdClass();
+          $return->messages = $messages['error'];
+          // form specific error handling
+          if('user_login' == $form_id) {
+            $return->messages = array('Invalid Username / Password'); // we are overriding the error message
+          } elseif('user_pass' == $form_id) {
+            ;
+          }
+        } else {
+          $return->status = 'success';
+          $return->data = new stdClass();
+          if(isset($messages['status']) && is_array($messages['status']) && count($messages['status']) > 0) $return->messages = $messages['status'];
+          else $return->messages = array();
+          // form specific success handling
+          if('user_login' == $form_id) {
+            global $user;
+            
+            // debug
+            // error_log("From " . basename(__FILE__). " line " .__LINE__. ":  \$user: " .  print_r($user, 1));
+            
+            $return->data->user = $user;
+          } elseif('user_pass' == $form_id) {
+            ; // do we want to return anything useful?
+          }
+        }
+      }
+    }
+  } elseif('user' == $op) {
+    // for D7
+    $user = user_load_by_name(func_get_arg(1));
+    if(!$user) {
+      $return->status = 'error';
+      $return->data = new stdClass();
+      $return->messages = array('Invalid username.');
+    } else {
+      $return->status = 'success';
+      $return->data = new stdClass();
+      $return->data->id = $user->uid;
+      $return->data->name = $user->name;
+      // Edit user should be passed over to community site
+      $hostname  = $_SERVER['HTTP_HOST'];
+      $http_host_suffix = preg_replace('/^.*(\..*\..*)$/', '$1' , $hostname);  // make suffix as .mylifetime.com  
+      $http_host = "www" . $http_host_suffix;
+      if (preg_match('/^dev/', $hostname) )    $http_host = "devwww" . $http_host_suffix;
+      if (preg_match('/^qa/', $hostname) )     $http_host = "qawww"  . $http_host_suffix;  
+      $return->data->url ='http://' . $http_host . '/community/user/' . $user->name;
+      $return->messages = array();
+    }
+  }
+  
+  if(NULL == $return) {
+    $return = new stdClass();
+    $return->status = 'error';
+    $return->data = new stdClass();
+    $return->messages = array('Unknown operation.');
+  }
+  
+  echo drupal_json_encode($return);
+  
+  return MENU_FOUND;
+}

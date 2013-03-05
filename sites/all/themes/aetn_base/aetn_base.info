@@ -1,0 +1,11 @@
+name = AETN
+description = "AETN base theme that is subclassed by each site specific theme."
+version = VERSION
+core = 7.x
+
+stylesheets[all][] = "css/style.css"
+scripts[] = "js/script.js"
+scripts[] = "js/jcarousel/jquery.jcarousel.pack.js"
+scripts[] = "js/bgiframe/jquery.bgiframe.pack.js"
+
+regions[content] = Content

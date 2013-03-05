@@ -1,0 +1,9 @@
+<script type="text/javascript" src="<?php print $conf['cdn_static2'] .base_path() .drupal_get_path('theme', 'aetn_base') . '/js/swfobject.js' ?>"></script>
+<link rel="stylesheet" type="text/css" href="<?php print $conf['cdn_static2'] .base_path() . drupal_get_path('module', 'doubleclick') . '/css/doubleclick-interstitial.css' ?>"></link>
+<script type="text/javascript">
+  // Dart comes from AdManager_DoubleClick::singleton();
+  (function(){
+      var ad_path = escape('<?php print $site; ?>/<?php print $zone1; ?><?php print $zone2?'/'.$zone2:''; ?>;s1=<?php print $s1; ?>;s2=<?php print $s2; ?>;pid=<?php print $pid; ?>;kw=<?php print $kw; ?>;game=<?php print $game; ?>;sweeps=<?php print $sweeps; ?>;show=<?php print $show; ?>;movie=<?php print $movie; ?>;ptype=<?php print $ptype; ?>;cat=<?php print $cat; ?>;test=<?php print $test; ?>;aetn=<?php print $aetn; ?><?php print $attributes?';'.$attributes:''; ?>;pos=<?php print $pos; ?>;tile=' + (++Dart.tile) + (Dart.tile == 1? ';dcopt=ist': '') + ';sz=5x5;' + Dart.quantSegs + 'ord=' + Dart.ord + '?');
+      document.write('<iframe class="ad_5x5_interstitial" id="ad_5x5_top_interstitial" src="<?php print url(drupal_get_path('module', 'doubleclick')); ?>/templates/interstitial-iframe.html?path=' + ad_path + '" frameborder="0" scrolling="no" width="0" height="0"></iframe>');      
+  })();
+</script>

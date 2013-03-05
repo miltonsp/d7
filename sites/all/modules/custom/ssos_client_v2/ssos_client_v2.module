@@ -1,0 +1,1389 @@
+<?php
+// $Id: ssos_client_v2.module 134094 2012-04-24 16:23:31Z milton $
+
+//  This ssos client uses the version 2 protocol to communicate with the SSOS Server
+
+// The site_key_xxx should be defined in db.inc, otherwise the default falue applies
+//      where 'xxx' is the $pid
+// $site_key = variable_get(('site_key_' . $pid), 'tYf89raPbxwz');
+
+define('LIFETIME_USERNAME_MAX_LENGTH', 25);
+
+/**
+ * Implementation of hook_init()
+ *
+ * check if user is logged into another ltv domain - cookie based
+ */
+function ssos_client_v2_init() {
+  global $cookie_domain;
+  global $user;
+  global $conf;
+  
+  // Skip the entire init if 'external_registration_server' not set
+  if (!variable_get('external_registration_server', '')) {
+    return;
+  }
+
+  if (variable_get('ssos_client_v2_debug', FALSE)) {
+    ssos_client_v2_debug();
+  }
+  // User has logged in via main site or has visited main site
+  if (isset($_COOKIE['loginstatus']) && !isset($_COOKIE[$conf['site_short_name'] . 'status'])) {     
+    setcookie($conf['site_short_name'] . 'status', $_COOKIE['loginstatus'], 0, '/', $cookie_domain); 
+  }
+  // User has returned back to community site after logging out main site
+  if (!isset($_COOKIE['loginstatus']) && isset($_COOKIE[$conf['site_short_name'] . 'status'])) {
+    ssos_client_v2_user_logout($_GET['q']);
+  }
+  
+  // User is anonymous locally but logged in at mylifetime.com
+  if (user_is_anonymous() && isset($_COOKIE['loginstatus'])
+      && strlen(session_id()) > 20    //  Make sure that the session handler is available; otherwise the login
+                                      //  is erroneous. Normally, its 26 characters in php
+     ) {
+    // Pass in the array of roles that are not allowed to use cookie authentication
+
+    // debug
+    // $req_uri = request_uri();
+    // error_log("From ssos_client_v2.module line 53:   \$req_uri: " . print_r($req_uri, 1));
+
+    ssos_client_v2_cookie_login(variable_get('external_exclude_session_roles', array()));
+  }
+  // To avoid cookie crumbles and crying over spilt milk
+  // do not allow users to be logged into more than 1 stage (dev, qa, local, live) at a time
+  unset($_COOKIE[substr($_SERVER["SERVER_NAME"], 0, 2)]);
+  if (isset($_COOKIE['qa']) || isset($_COOKIE['de']) || isset($_COOKIE['lo']) || isset($_COOKIE['co'])) {
+    drupal_set_message("Warning, you were logged into another stage of this site. Your cookies were out of sync and have been reset. " . l('Click here to login for this site.', 'user', array('attributes' => array('class' => 'popups-form-reload'))), 'error', FALSE);
+    // Destroy all cookies from previous session
+    $cookies = array(session_name(), $conf['site_short_name'] . 'status', 'loginstatus', 'lo', 'de', 'qa', 'co');
+    foreach ($cookies as $cookie) {
+      setcookie($cookie, '', time()-42000, '/', $cookie_domain);
+    }
+  }
+}
+
+function ssos_client_v2_cookie_login($exclude_roles = FALSE) {
+  global $cookie_domain;
+  global $conf;
+  if (variable_get('ssos_client_v2_debug', FALSE)) {
+    ssos_client_v2_debug('SESSION--QUERY');
+  }
+  // user has provided enough information to prove they are logged in on another community site.
+  $pid = variable_get('external_registration_partner_id', '40');
+  $time = $_SERVER['REQUEST_TIME'];
+  $sid = $_COOKIE[session_name()];
+  $postdata = http_build_query(
+    array(
+      'pid'   => $pid,
+      'sid'   => $sid,
+      'time'  => $time,
+      'check' => _ssos_client_v2_check_cal($pid, $time, NULL, NULL , $sid),
+      'detail' => '1',
+    ), '', '&'
+  );
+
+  if ($response = ssos_client_v2_post_data($postdata, 'identity/sessionquery')) {
+    if (is_array($response['success']['user']['roles'])) {
+      // for security reasons do not login specific user roles like admin unless password request
+      if (!array_intersect($exclude_roles, $response['success']['user']['roles'])) {
+        // Log user in, or register new user if not already present.
+        user_external_login_register($response['success']['user']['name'], 'ssos_client_v2');
+        // Write session, update timestamp, run user 'login' hook.
+        ssos_client_v2_finalize($response['success']['user']);
+        ssos_client_v2_profile_data($response['success']['user']);
+        // If this is a new user set a welcome message and send email verify email
+        // both of these things should be happening in user_external_login_register which
+        // calls upon user_save.
+        // if (!db_result(db_query("SELECT name FROM {users} WHERE name = '%s'", array($response['success']['user']['name'])))) {
+
+        // For Drupal 7
+        $result = db_query('SELECT name FROM {users} WHERE name = :name', array(':name' => $response['success']['user']['name'])); 
+        if (!$result->rowCount()) {
+          if (function_exists('user_email_verify_confirm_send')) {
+            user_email_verify_confirm_send();
+          }
+          drupal_set_message('Thanks for joining commmunity please check email to confirm.');
+        }
+      }
+      else {
+        drupal_set_message('Administrators must ' . l('re-login', 'user', array('attributes' => array('class' => 'popups-form-reload'))) . '  to verify their identity.', 'error', FALSE);
+      }      
+    }
+    // setcookie($conf['site_short_name'], $_COOKIE['PHPSESSID'], 0, '/', $cookie_domain);
+    // set a cookie to identify where all these session ID's came from
+    setcookie(substr($_SERVER["SERVER_NAME"], 0, 2), $_COOKIE[session_name()], 0, '/', $cookie_domain);     
+  } 
+}
+
+/**
+ * Custom version of user_authenticate_finalize
+ */
+function ssos_client_v2_finalize($account) {
+  global $user;
+
+  watchdog('user', 'Session opened for %name.', array('%name' => $user->name));
+  // Update the user table timestamp noting user has logged in.
+  // This is also used to invalidate one-time login links.
+  // db_query("UPDATE {users} SET login = %d WHERE uid = %d", array(time(), $user->uid));
+
+  // For Drupal 7
+  $num_updated = db_update('users') // Table name no longer needs {}
+    ->fields(array(
+      'login' => time(),
+    ))
+    ->condition('uid', $user->uid, '=')
+    ->execute();  
+
+  user_module_invoke('login', $account, $user);
+}
+
+
+/**
+ * Implementation of hook_form_alter()
+ * We replace the local login validation handler with our own
+ * Thank You "Pro Drupal Development - second edition"
+ */
+function ssos_client_v2_form_alter(&$form, $form_state, $form_id) {
+  global $user;
+  global $conf;
+
+  // Skip the user hook if 'external_registration_server' not set
+  if (!variable_get('external_registration_server', '')) {
+    return;
+  }
+
+  // debug
+  error_log("From " . basename(__FILE__). " line " .__LINE__. ":  \$form_id: " .  print_r($form_id, 1));
+  // error_log("From " . basename(__FILE__). " line " .__LINE__. ":  \$form_state['input']: " .  print_r($form_state['input'], 1));
+  // error_log("From " . basename(__FILE__). " line " .__LINE__. ":  \$form_state: " .  print_r($form_state, 1));
+
+  $valid_forms = array('user_login', 'user_login_block', 'user_register', 'user_pass', 'user_profile_form', 'ltv_user_register_step2');
+  // form alter the form only on post so that we can inspect the values and determine if we should
+  // ping LTV auth servers. For example: local user 1 shouldn't ping ltv
+  if (in_array($form_id, $valid_forms) && $form_state['input'] && !in_array($form_state['input']['name'], variable_get('ssos_client_v2_local_only_users', array()))) {
+  // if (in_array($form_id, $valid_forms)) {
+    // setup ssos_client_v2 validators for user forms
+    switch ($form_id) {
+      case 'user_login':
+      case 'user_login_block':
+        $submit_handler = 'ssos_client_v2_login_validate';
+        $array_key = array_search('user_login_authenticate_validate', $form['#validate']);
+        break;
+
+      case 'user_register':
+      case 'ltv_user_register_step2':
+      case 'user_profile_form':
+        // only add the ssos_client_v2 stuff on the account form
+        // prevent from infecting the user_profile categories
+        // account form provides email and password
+        if ($form_id == 'user_register'
+            || $form_id == 'ltv_user_register_step2'
+            || $form['_category']['#value'] == 'account'
+            || $form['_category']['#value'] == 'basics') {   // Need also 'basics'
+          $submit_handler = 'ssos_client_v2_save_validate';
+        }
+        break;
+
+      case 'user_pass':
+        // We do not want Drupal to handle sending out password reset
+        // array_pop($form['#submit']);
+        $submit_handler = 'ssos_client_v2_password_reminder';
+        break;
+    }
+
+    // debug
+    error_log("From " . basename(__FILE__). " line " .__LINE__. ":  \$form['#validate']: " .  print_r($form['#validate'], 1));
+
+
+    // user register and user pass have predicatable validate handlers
+    if (!$array_key) {
+      $array_key = array_search($form_id . '_validate', $form['#validate']);
+    }
+
+    if(!$submit_handler) {
+      ;
+    }
+    // place ssos_client_v2 validators before other validators
+    elseif ($array_key === FALSE) {
+      // Could not find it. Some other module must have run form_alter().
+      // We'll simply add our validation just before the final validator.
+      $final_validator = array_pop($form['#validate']);
+      $form['#validate'][] = $submit_handler;
+      $form['#validate'][] = $final_validator;
+    }
+    else {
+      // Found the local validation function. Replace with ours.
+      $form['#validate'][$array_key] = $submit_handler;
+    }
+  }
+
+  // Super Accounts (local only) do not display newsletters or pass profile data to auth servers
+  if (  !isset($form['account']['name']['#default_value'])
+        || !in_array($form['account']['name']['#default_value'], variable_get('ssos_client_v2_local_only_users', array()))
+     ) {
+    if (($form_id == 'user_profile_form' && $form['_category']['#value'] == 'account') || 'ltv_user_register_step2' == $form_id) {
+      // TV newsletters and mobile alerts
+      $form = array_merge($form, _ltv_newsletters());
+      
+      if('ltv_user_register_step2' == $form_id) {
+        unset($form['newsletters']['mobile_link']);
+        foreach($form['newsletters'] as $k=>$v) {
+          if('#' != $k{0} && ($cp = strrpos($v['#title'], 'Newsletter')) !== FALSE) {
+            $form['newsletters'][$k]['#title'] = trim(substr($v['#title'], 0, $cp));
+          }
+        }
+      }
+    }
+    // if ltv_uid is not set, fetch it from authentication server
+    if (isset($form['_account']['#value']) && !$form['_account']['#value']->ltv_uid) {
+      $pid = variable_get('external_registration_partner_id', '40');
+      $postdata = http_build_query(array('pid' => $pid, 'mail'  => $form['_account']['#value']->mail, 'info_only' => 1), '', '&');
+      $response = ssos_client_v2_post_data($postdata, 'identity/password', $account);
+      $form['_account']['#value']->ltv_uid = $response['success']['user']['uid'];
+      if (module_exists('user_profile')) {
+        db_query("UPDATE {user_profile} SET ltv_uid = %d WHERE uid = %d", $response['success']['user']['uid'], $form['_account']['#value']->uid);
+      }
+      // Refresh user object.
+      $user = user_load(array('uid' => $form['_account']['#value']->uid), TRUE);
+    }
+
+    // sync up the newsletter form fields with values on lifetime servers
+    if ($form_id == 'user_profile_form' && is_array($form['newsletters'])) {
+      $pid = variable_get('external_registration_partner_id', '40');
+      $time = $_SERVER['REQUEST_TIME'];
+      $name = $form['_account']['#value']->name;
+      // send empty values for nlids to get current values from ltv
+      $postdata = http_build_query(
+        array(
+          // 'uid'   => $form['_account']['#value']->ltv_uid,
+          'name'  => $name,
+          'pid'   => $pid,
+          'time'  => $time,
+          'check' => _ssos_client_v2_check_cal($pid, $time, $name, NULL , NULL),
+          'nlids_sub' => '',
+          'nlids_unsub' => '',
+        ), '', '&'
+      );
+
+      // Help the user out by prefilling in this field with existing mobile phone number
+      $form['newsletters']['phone']['#default_value'] = $form['_account']['#value']->phone;
+      $response = ssos_client_v2_post_data($postdata, 'newsletter/info');
+      // a list of all signed up newsletters
+      $nlids = explode(',', $response['success']['content']['nlids']);
+      // a list of all possible newsletters to sign up for on this site
+      $newslist = array_keys($form['newsletters']);
+      if(is_array($nlids)) {
+        // least ammount of loops only check newsletters that are signed up
+        foreach ($nlids as $nlid) {
+          if (!empty($nlid)) {
+            foreach ($newslist as $item) {
+              if ($nlid == substr(strrchr($item,'_'), 1)) {
+                $form['newsletters'][$item]['#default_value'] = 1;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+/**
+ * User Login Form validation handler.
+ */
+function ssos_client_v2_login_validate($form, &$form_state) {
+
+  // Skip the user hook if 'external_registration_server' not set
+  if (!variable_get('external_registration_server', '')) {
+    return;
+  }
+
+  if (user_is_logged_in()) {
+    // Another module has already handled authentication
+    return;
+  }
+  // Call our custom authentication function.
+  ssos_client_v2_user_authenticate($form_state['values']);
+
+  global $user;
+  $form_state['uid'] = $user->uid;
+  
+  // debug
+  error_log("From " . basename(__FILE__). " line " .__LINE__. ":  \$form_state['uid']: " .  print_r($form_state['uid'], 1));
+
+}
+
+/**
+ * Use LifetimeTV Authentication API to send user's password to thier email address
+ */
+function ssos_client_v2_password_reminder($form, $form_state) {
+  // LifetimeTV Auth only allows email address to request password
+  // We still want to allow the user to retrieve password using username
+  if (!$email = db_result(db_query("SELECT mail FROM {users} WHERE name = '%s'", array($form_state['values']['name'])))) {
+    $email = $form_state['values']['name'];
+  }
+
+  $postdata = http_build_query(array('name'  => $email));
+  ssos_client_v2_post_data($postdata, 'identity/password', $account);
+}
+
+/**
+ * User Registration and Update Form validation handler.
+ */
+function ssos_client_v2_save_validate($form, &$form_state) {
+  $account = $form_state['values']['_account'];
+  $values = $form_state['values'];
+
+  // Added to diaallow spaces in username
+  $name = $values['name'];
+  if (strpos($name, ' ') !== FALSE) {
+      form_set_error('name', t('The Username cannot contain spaces.'));
+  }
+
+  // If mobile fields are checked make the mobile phone number required
+  if ($values['newsletter_on_tv_mobile_7'] == 1 && $values['phone'] == '' || $values['newsletter_sweepstakes_mobile_5'] == 1 && $values['phone'] == '') {
+    form_set_error('phone', 'Cell phone number is required to subscribe to mobile newsletters');
+  }
+  else {
+    if (($account->phone == '' && isset($values['phone'])) && module_exists('user_profile')) {
+      db_query("UPDATE {user_profile} SET phone = '%s' WHERE uid = %d", $values['phone'], $account->uid);
+    }
+    // because we unset #validate ssos_client_v2_form_alter() because we are validating against a different database
+    /// we still need to make sure other modules can run their own validation like location
+    if ($form['_category']['#value'] != 'account'
+     && $form['_category']['#value'] != 'basics'
+     && $form['form_id']['#value'] != 'ltv_user_register_step2') {   // user_register_validate can't be applied to the step2 form -- also buggy
+      user_register_validate($form, $form_state);
+    }
+    // send user form values to user save function
+    ssos_client_v2_user_save($account, $form_state['values']);    
+  }
+}
+
+/**
+  * TO BE USED with External Registration API
+  * Save changes to a user account or add a new user.
+  *
+  * @param $account
+  *   The $user object for the user to modify or add. If $user->uid is
+  *   omitted, a new user will be added.
+  *
+  * @param $form_values
+  *   An array of fields and values to save. For example array('name' => 'My name');
+  *   Setting a field to NULL deletes it from the data column.
+  *
+  * @param $category
+  *   (optional) The category for storing profile information in.
+  */
+function ssos_client_v2_user_save($account, &$form_values = array(), $category = 'account') {
+  global $user;
+  global $cookie_domain;
+  global $loginstatus_cookie_expiration;
+  global $conf;
+  
+  $pid = variable_get('external_registration_partner_id', '40');
+  // Dynamically compose a SQL query:
+  $user_fields = user_fields();
+
+  // If the account is already registered we need to update the users information
+  if (user_is_logged_in() && $form_values['form_id'] != 'user_register') {
+    $time = $_SERVER['REQUEST_TIME'];
+    $http_query = ssos_client_v2_build_query($form_values);
+    $action = 'registration/update';
+  }
+  else {   // Enter here if user is not already logged in
+    if (!isset($array['created'])) {
+      $form_values['created'] = time();
+    }
+    // build array of form values
+    $http_query = ssos_client_v2_build_query($form_values);
+    $action = 'registration/create';
+  }
+  // split the newsletters list into subscribe and unsubscribe
+  $newsletters = ssos_client_v2_newsletters($http_query);
+
+  // Temporary fix for NO-STATE
+  $state_override = $account->state;
+  if (!$account->state) $state_override = 'WY';		//   Only two digits here
+
+  // debug
+  // error_log("From ssos_client_v2.module line 329:   \$form_values['_account']: " . print_r($form_values['_account'], 1));
+  // drupal_set_message("From ssos_client_v2.module line 330:   \$form_values: " . print_r($form_values, 1));
+  // error_log("From ssos_client_v2.module line 331:   \$account: " . print_r($account, 1));
+
+  // get postdata values from user form values
+  // using account as default seems redundant all values should exist in form
+  $name = $http_query['name'] ? $http_query['name'] : $account->name;
+  $ltv_uid = (($account->ltv_uid) ? $account->ltv_uid : '');
+  $check = _ssos_client_v2_check_cal($pid, $time, $name, $ltv_uid , NULL);
+
+  $postdata = http_build_query(
+    array(
+      'name'  => $name,
+      'email' => $http_query['mail'] ? $http_query['mail'] : $account->mail,
+      'uid'   => $account->ltv_uid,
+      'pid'   => $pid,
+      'time'  => $time,
+      // 'state' => $http_query['state'] ? $http_query['state'] : $account->state,
+      'state' => $http_query['state'] ? $http_query['state'] : $state_override,
+      'city'  => $http_query['city'] ? $http_query['city'] : $account->city,
+      'country_code'  => $http_query['country'] ? $http_query['country'] : $account->country,
+      'address'  => $http_query['address'] ? $http_query['address'] : $account->address,
+      'zip'   => $http_query['postal_code'] ? $http_query['postal_code'] : $account->postal_code,
+      'dob'   => $http_query['dob'] ? $http_query['dob'] : $account->dob,
+      // Use $form_values['phone'] instead of $account->phone because of this field appearing on two screens
+      'mobile_number' => $http_query['mobile_number'] ? $http_query['mobile_number'] : str_replace('-', ' ', $form_values['phone']),
+      'first_name' => $http_query['firstname'] ? $http_query['firstname'] : $account->firstname,
+      'last_name' => $http_query['lastname'] ? $http_query['lastname'] : $account->lastname,
+      'gend'  => $http_query['gender'] ? $http_query['gender'] : $account->gender,
+      'terms' => $http_query['terms'] ? $http_query['terms'] : $account->terms,
+      'check' => $check,
+      'nlids_sub' => $newsletters['subscribe'] ? $newsletters['subscribe'] : 0,
+      'nlids_unsub' => $newsletters['unsubscribe'] ? $newsletters['unsubscribe'] : 0,
+    ), '', '&'
+  );
+
+  // ltv authentication server doesn't like url encoded postdata
+  $postdata = str_replace(array('%40', '%2C'), array('@', ','), $postdata);
+
+  // only send password info to lifetime if user has changed this field
+  if (!empty($http_query['pass'])) {
+    $update_pass = http_build_query(array('pass' => $http_query['pass']));
+    $postdata = $postdata . '&' . $update_pass;
+  }
+
+  $postdata_base = $postdata;
+  
+  // The 'edit' api also needs to pass along the field names which are going to be edited
+  if ($action == 'registration/update') {
+    $field_list = '' 
+        . 'fields[]=dob'		
+        . '&fields[]=first_name' 
+        . '&fields[]=last_name'
+        . '&fields[]=mobile_number'
+        // . '&fields[]=gend'   // Uncomment when editable in community
+        . '&fields[]=zip'	
+        . '&fields[]=city'
+        . '&fields[]=address'
+        . '&fields[]=state'
+        . '&fields[]=country_code'
+        ;
+    $postdata = $postdata . '&' . $field_list;
+  }
+
+  // If no errors occurred during authentication go ahead and login user locally
+  // $success holds the return data from lifetimeTV
+  $response = ssos_client_v2_post_data($postdata, $action, $account);
+
+  if (!user_is_logged_in()) {
+    $form_values['ltv_uid'] = $response['success']['user']['uid'];
+  }
+  // If registered need to do a 'sessionlogin', but check if first response was succesfull
+  if ($response && $action == 'registration/create') {
+
+    /*
+    $sid_external = $_COOKIE[session_name()];
+    if (!$sid_external) {
+      $sid_external = session_id();
+      setcookie(session_name(), $sid_external, $loginstatus_cookie_expiration, '/', $cookie_domain);
+    } 
+    */
+    
+    // Allways use latest session_id
+    $sid_external = session_id(); 
+    setcookie(session_name(), $sid_external, $loginstatus_cookie_expiration, '/', $cookie_domain);
+
+ 
+    $sessiondata = http_build_query(
+        array(
+        'name'    => $form_values['name'],
+        'pass'    => $form_values['pass'],
+        'sid'     => $sid_external,
+        'pid'     => variable_get('external_registration_partner_id', '40'),
+        'login'   => 1,
+        ), '', '&'
+        );
+    $response2 = ssos_client_v2_post_data($sessiondata, 'identity/sessionlogin');
+    setcookie($conf['site_short_name'] . 'status', $form_values['name'], $loginstatus_cookie_expiration, '/', $cookie_domain);
+    setcookie('loginstatus', $form_values['name'], $loginstatus_cookie_expiration, '/', $cookie_domain);
+  }  
+  // only send if first response is successful to hide failed response
+  // from authentication server
+  if ($response) {
+    // send along the newsletter subscriptions based upon current form
+    ssos_client_v2_post_data($postdata_base, 'newsletter/update');
+  }
+  
+  // If phone is filled-in in newsletter screen, use it. Since the 'phone' appears in two screens we need to do this to pick up this change
+  if ($action == 'registration/update' &&  module_exists('user_profile') &&  isset($form_values['phone']) &&  $form_values['phone'] != $form_values['_account']->phone)  {
+    db_query("UPDATE {user_profile} SET phone = '%s' WHERE uid = %d", $form_values['phone'], $user->uid);
+  }
+}
+
+function ssos_client_v2_user_authenticate($form_values) {
+  global $cookie_domain;
+  global $loginstatus_cookie_expiration;
+  global $conf;
+  $pid = variable_get('external_registration_partner_id', '40');
+
+
+  // Please note the 'arg_separator' was added in PHP 5.1.2 and needs to be set to '&' otherwise it defaults to '&amp;' messes up
+  $postdata = http_build_query(
+    array(
+      'pass' => $form_values['pass'],
+      'name' => $form_values['name'],
+      'pid'  => $pid,
+      'detail' => 1
+    ), '', '&'
+  );
+
+  // If no errors occurred during authentication go ahead and login user locally
+  // The 'identity/login' call will change the session on the client. This requires restriction
+  //   on the client login process. Instead by using 'identity/info' and 'indentity/sessionlogin' it is 
+  // more forgiving on the client login.
+  if ($response = ssos_client_v2_post_data($postdata, 'identity/info')) {
+  // if ($response = ssos_client_v2_post_data($postdata, 'identity/login')) {
+    // Log user in, or register new user if not already present.
+    user_external_login_register($form_values['name'], 'ssos_client_v2');
+    // Write session, update timestamp, run user 'login' hook.
+    //  Not needed in Drupal 7
+    // user_authenticate_finalize($form_values);
+
+    $session_cookie = session_id();
+    $sessiondata = http_build_query(
+      array(
+        'pid'     => $pid,
+        'sid'     => $session_cookie,
+        'name'    => $form_values['name'],
+        'pass'    => $form_values['pass'],
+        'login'  => 1,
+      ), '', '&'
+    );
+    $response2 = ssos_client_v2_post_data($sessiondata, 'identity/sessionlogin');
+
+    // debug
+    error_log("From " . basename(__FILE__). " line " .__LINE__. ":  \$response2: " .  print_r($response2, 1));
+    error_log("From " . basename(__FILE__). " line " .__LINE__. ":  \$sessiondata: " .  print_r($sessiondata, 1));
+
+
+    $session_cookie = $response2['success']['session'];
+    setcookie(session_name(), $session_cookie, $loginstatus_cookie_expiration, '/', $cookie_domain);
+    setcookie('loginstatus', $response['success']['user']['name'], $loginstatus_cookie_expiration, '/', $cookie_domain);
+    setcookie($conf['site_short_name'] . 'status', $response['success']['user']['name'], $loginstatus_cookie_expiration, '/', $cookie_domain);
+    setcookie(substr($_SERVER["SERVER_NAME"], 0, 2), $session_cookie, 0, '/', $cookie_domain);  
+    
+    // fix for Ajax login -- the very first time -- makes sure to write the session info. Fixes the double login requirement
+    if (user_is_logged_in())  {$_SESSION['loginstatus'] = 1;}
+
+    return ssos_client_v2_profile_data($response['success']['user']);
+  }
+}
+
+/**
+  * Send the query to lifetimetv user validation server
+  *
+  * @param $postdata
+  *   The fields that will be sent to lifetimetv server
+  *   this works for new users and updated user information
+  * @param $action
+  *   The path to authentication server which to send postdata
+  *
+  * @param $account
+  *   user object
+  */
+function ssos_client_v2_post_data($postdata = array(), $action = 'identity/info', $account = array()) {
+  global $cookie_domain;
+  global $conf;
+  $external_registration_server = variable_get('external_registration_server', 'http://www.mylifetime.com');
+
+  // Drupal 7 changed params in drupal_http_request()
+  // $result = (array)drupal_http_request("$external_registration_server/$action", array('Content-type' => 'application/x-www-form-urlencoded'), 'POST', $postdata, 2);
+
+  $options = array(
+    'headers' => array('Content-type' => 'application/x-www-form-urlencoded'),
+    'method'  => 'POST',
+    'data'    => $postdata,
+    'max_redirects' => 2,
+  );
+  
+  $result = (array)drupal_http_request("$external_registration_server/$action", $options);
+
+  // Replace bad characters  \x3c , \x3e and \x26
+  $result = str_replace(array('\x3c', '\x3e', '\x26'), array("<", ">", "&"), $result['data']);
+  $result_decoded = json_decode($result, true);
+  $account_temp = $result_decoded['success']['user'];
+  if (variable_get('ssos_client_v2_debug', FALSE)) {
+    ssos_client_v2_debug(strtoupper($action), $postdata, $result);
+  }
+  // Always match our community cookie set to the session cookie from authentication server.
+  if ($result_decoded['success']['session']) {
+    setcookie(session_name(), $result_decoded['success']['session'], 0, '/', $cookie_domain);
+  }
+
+  if (!$account_temp['uid'] || $result_decoded['result']) {
+    if ($result_decoded['error']['messages']['error']) {
+      // prep error messages for screen
+      foreach ($result_decoded['error']['messages']['error'] as $error) {
+        // Less process to create two arrays and compare instead of looping through array
+        // of possible errors and doing a string search.
+        $error = strip_tags($error);
+        $error = trim($error);
+        if ($error == 'Improper SessionLogin request' || $error == 'Invalid uid check' || $error == 'Invalid uid [user id]') {
+          watchdog('user', $error . ' ' . $action, array(), WATCHDOG_WARNING);
+        }  
+        // catch all invalid birthday errors and strip message
+        // it's too confusing for users. Another error identifies the problem
+        if (strpos($error, 'in year element')) {
+          $error = '';
+          continue; // skip the rest of this loop execution and jump to next one
+        }
+        
+        $error_array = drupal_map_assoc(explode(' ', strtolower($error)));
+        $possible_errors = array('verify' => 'mail', 'e-mail' => 'mail', 'state' => 'state', 'postal' => 'postal_code', 'zip' => 'postal_code', 'name' => 'name', 'password' => 'pass', 'username' => 'name', 'birth' => 'dob', 'user' => 'user', 'alpha-numeric' => 'user', 'sessionlogin' => 'name', 'uid' => 'user');
+        $match = array_intersect_key($possible_errors, $error_array);
+        // Email error contains both email and password error, but we only need to notify that email
+        // is the real error. That's why we do an array_pop on matching errors.
+        if ($field = array_pop($match)) {
+          // translate error messages to make them more usable
+          $error = str_replace(
+            array(
+              'Invalid Member Name. Member Names may only contain alpha-numeric characters, periods, dashes and underscores; they may not contain spaces.',
+              'Invalid Zip', 
+              'Invalid Birth Date',
+              'Verify your email address and re-submit',
+              'Invalid uid check',
+              'Improper SessionLogin request',
+              'State field is required.', 
+              'Confirm Email Address field is required.',
+              'Invalid User',
+              'Invalid uid [user id]',
+            ),
+            array(
+              '',
+              'This postal code cannot be located.',
+              'You must be at least 13 years old to register',
+              'Invalid email address.',
+              '',
+              '', 
+              '',
+              '',
+              '',
+            ),
+            $error
+          );
+          form_set_error($field, $error);
+        }
+        else {
+          // make sure the form error is unique so use the error as the id
+          form_set_error($error, $error);
+        }
+      }
+      // CATCH ALL: there was an error from authentication server but no message
+      if (!$error) {
+        form_set_error('user', '');
+      }
+    }
+    return FALSE;
+  }
+  return $result_decoded;
+}
+
+
+/**
+ * A new user is being created so lets fill in profile information
+ * with the response values from lifetime servers
+ *
+ */
+function ssos_client_v2_profile_data($response) {
+  // user_authenticate_finalize creates the global $user and session so we can update their email
+  global $user;
+
+  if (is_array($response['roles'])) {
+    // UPDATE user roles if lifetime global roles are different than current user's roles.
+    $roles = array_diff($response['roles'], $user->roles);   
+    if (!empty($roles)) {
+
+      $num_deleted = db_delete('users_roles')
+        ->condition('uid', $user->uid)
+        ->execute(); 
+        
+      foreach ($response['roles'] as $role) {
+        if ($role == 'admin') { $role = 'administrator'; }   // Change of role from Drupal 6 to Drupal 7
+        $rid = db_select('role', 'r')
+                 ->fields('r', array('rid'))
+                 ->condition('name', $role, '=')
+                 ->execute()
+                 ->fetchField();  
+        if (!$rid) { continue; }      
+        db_insert('users_roles')
+          ->fields(array(
+            'uid' => $user->uid,
+            'rid' => $rid,
+            ))
+          ->execute();       
+      } 
+ 
+      /*
+      db_query('DELETE FROM {users_roles} WHERE uid = %d', array($user->uid));
+
+      foreach ($response['roles'] as $role) {
+        $rid = db_result(db_query("SELECT rid FROM {role} WHERE name = '%s'", array($role)));
+        db_query("INSERT INTO {users_roles} (uid, rid) VALUES (%d, %d)", array($user->uid, $rid));
+      }
+      */
+    } 
+  }
+
+  // user_external_login_register doesn't save emails so we have to add this in
+  // this also means that this user used there lifetimetv login
+  if ($user->mail == '') {
+    $user->mail = $response['mail'];
+    // db_query("UPDATE {users} SET mail = '%s' WHERE uid = %d", array($response['mail'], $user->uid));
+    
+    db_update('users')
+      ->condition('uid', $user->uid)
+      ->fields(array('mail' => $response['mail']))
+      ->execute();
+ 
+    if (module_exists('user_profile')) {
+      // save important data
+      db_query("INSERT INTO {user_profile} (uid, ltv_uid, gender, dob, phone, firstname, lastname, address) VALUES (%d, %d, %d, '%s', '%s', '%s','%s','%s')",
+               $user->uid, $response['uid'], $response['gender'], $response['dob'], $response['mobile_number'], $response['first_name'], $response['last_name'], $response['address']);
+      
+      // Remove.  Not needed for the SSOS server  state is a two digit code
+      // $states = array_flip(location_state_listings());
+      // Change location_reverse_state_listings to use all caps -- Fixed, used ucwords().
+      // $state = $states[ucwords(strtolower($response['state']))];
+      $state = $response['state'];
+      
+      // save the location data
+      db_query("INSERT INTO {location_user} (uid, city, postal_code, country, state) VALUES (%d, '%s', '%s', '%s', '%s')", $user->uid, $response['city'], $response['postal_code'], $response['country_code'], $state);
+    }
+  }
+  
+  // user has image here on community
+  if (isset($user->picture) && ($response['picture'] != $user->picture)) {
+    ssos_client_v2_update_picture($user->name, $user->picture);
+  }
+  
+  // Update any fields that are not set for whatever reason
+  // very rare case. here for data clean up.
+  if ( module_exists('user_profile') && user_is_logged_in()) {
+    if (!$user->gender && $response['gender']) {
+      db_query("UPDATE {user_profile} SET gender = %d WHERE uid = %d", $response['gender'], $user->uid);
+    }
+    // The $user->dob is an array of three elements: array('year' => 2007, 'month' => 2, 'day' => 15)
+    // Check the year part if not set or if '1900'
+    if ((!$user->dob['year'] || $user->dob['year'] == '1900') && $response['dob']) {
+      db_query("UPDATE {user_profile} SET dob = '%s' WHERE uid = %d", $response['dob'], $user->uid);
+    }
+    if (!$user->phone && $response['mobile_number']) {
+      db_query("UPDATE {user_profile} SET phone = '%s' WHERE uid = %d", $response['mobile_number'], $user->uid);
+    }
+    if (!$user->city && $response['city']) {
+      db_query("UPDATE {location_user} SET city = '%s' WHERE uid = %d", $response['city'], $user->uid);
+    }
+    if (!$user->country && $response['country_code']) {
+      db_query("UPDATE {location_user} SET country = '%s' WHERE uid = %d", $response['country_code'], $user->uid);
+    }
+    if (!$user->address && $response['address']) {
+      db_query("UPDATE {user_profile} SET address = '%s' WHERE uid = %d", $response['address'], $user->uid);
+    }
+    if (!$user->postal_code && $response['postal_code']) {
+      db_query("UPDATE {location_user} SET postal_code = '%s' WHERE uid = %d", $response['postal_code'], $user->uid);
+    }
+    if (!$user->state && $response['state']) {
+      db_query("UPDATE {location_user} SET state = '%s' WHERE uid = %d", $response['state'], $user->uid);
+    }
+    if (!$user->gender && $response['gender']) {
+      db_query("UPDATE {user_profile} SET gender = %d WHERE uid = %d", $response['gender'], $user->uid);
+    }
+  }  
+  if (user_is_logged_in()) {
+    if ((!$user->picture && $response['picture']) || ($user->picture == variable_get('user_picture_default', '') && $response['picture'])) {
+      ssos_client_v2_save_picture($response['picture']);
+    }
+  }
+  
+  // Refresh user object.
+  $user = user_load(array('uid' => $user->uid), TRUE);
+  
+  return $user;
+}
+
+/**
+ * Custom rewrite of file_save_upload. Since this image is not added via form
+ *
+ * @param $source
+ *   A string specifying the name of the upload field to save.
+ * @param $validators
+ *   An optional, associative array of callback functions used to validate the
+ *   file. The keys are function names and the values arrays of callback
+ *   parameters which will be passed in after the user and file objects. The
+ *   functions should return an array of error messages, an empty array
+ *   indicates that the file passed validation. The functions will be called in
+ *   the order specified.
+ * @param $dest
+ *   A string containing the directory $source should be copied to. If this is
+ *   not provided or is not writable, the temporary directory will be used.
+ * @param $replace
+ *   A boolean indicating whether an existing file of the same name in the
+ *   destination directory should overwritten. A false value will generate a
+ *   new, unique filename in the destination directory.
+ * @return
+ *   An object containing the file information, or 0 in the event of an error.
+ */
+function ssos_client_v2_save_picture($picture, $dest = FALSE, $replace = FILE_EXISTS_RENAME) {
+  global $user;
+  static $upload_cache;
+
+  $url = variable_get('external_registration_server', 'http://www.mylifetime.com') . '/' . $picture;
+  
+  if ($file = fopen($url, 'rb')) {
+    $filename = array_pop(explode('/', $picture));
+    $filename = md5($filename . time()) . strrchr($filename, '.');
+    $temp_path = file_directory_temp() . '/' . $filename;
+    $tmp = fopen($temp_path, 'wb');
+    
+    while ($piece = fread($file, 8192)) {
+      fwrite($tmp, $piece, 8192);
+    }
+    fclose($file);
+    fclose($tmp);
+    $info = image_get_info($temp_path);
+
+    // If required, validate the uploaded picture.
+    $validators = array(
+      'file_validate_name_length' => array(),
+      'file_validate_is_image' => array(),
+      'file_validate_image_resolution' => array(variable_get('user_picture_dimensions', '85x85')),
+      'file_validate_size' => array(variable_get('user_picture_file_size', '30') * 1024),
+    );
+
+    // Return cached objects without processing since the file will have
+    // already been processed and the paths in _FILES will be invalid.
+    if (isset($upload_cache[$source])) {
+      return $upload_cache[$source];
+    }
+
+    // Build the list of non-munged extensions.
+    // @todo: this should not be here. we need to figure out the right place.
+    $extensions = '';
+    foreach ($user->roles as $rid => $name) {
+      $extensions .= ' '. variable_get("upload_extensions_$rid",
+      variable_get('upload_extensions_default', 'jpg jpeg gif png txt html doc xls pdf ppt pps odt ods odp'));
+    }
+
+    // Begin building file object.
+    $file = new stdClass();
+    $file->filename = $filename;
+    $file->filepath = $temp_path;
+    $file->filemime = $info['mime_type'];
+
+    // Rename potentially executable files, to help prevent exploits.
+    if (preg_match('/\.(php|pl|py|cgi|asp|js)$/i', $file->filename) && (substr($file->filename, -4) != '.txt')) {
+      $file->filemime = 'text/plain';
+      $file->filepath .= '.txt';
+      $file->filename .= '.txt';
+    }
+
+    // If the destination is not provided, or is not writable, then use the
+    // temporary directory.
+    if (empty($dest) || file_check_path($dest) === FALSE) {
+      $dest = file_directory_temp();
+    }
+    
+    $file->source = $temp_path;
+    // hash up the filename and save it
+    $file->filename = $filename;
+    $file->destination = $filename;
+    $file->filesize = $info['file_size'];
+
+    // Call the validation functions.
+    $errors = array();
+    foreach ($validators as $function => $args) {
+      array_unshift($args, $file);
+      $errors = array_merge($errors, call_user_func_array($function, $args));
+    }
+
+    // Check for validation errors.
+    if (!empty($errors)) {
+      $message = t('The selected file %name could not be uploaded.', array('%name' => $file->filename));
+      if (count($errors) > 1) {
+        $message .= '<ul><li>'. implode('</li><li>', $errors) .'</li></ul>';
+      }
+      else {
+        $message .= ' '. array_pop($errors);
+      }
+      form_set_error($source, $message);
+      return 0;
+    }
+
+    // Move uploaded files from PHP's upload_tmp_dir to Drupal's temporary directory.
+    // This overcomes open_basedir restrictions for future file operations.
+    $file->filepath = $temp_path;
+
+    // If we made it this far it's safe to record this file in the database.
+    $file->uid = $user->uid;
+    $file->status = 1;
+    $file->timestamp = time();
+    drupal_write_record('files', $file);
+
+    // Add file to the cache.
+    $upload_cache[$source] = $file;
+    
+    // The image was saved using file_save_upload() and was added to the
+    // files table as a temporary file. We'll make a copy and let the garbage
+    // collector delete the original upload.  
+    $destination = variable_get('user_picture_path', 'pictures') . '/' . $filename;
+
+    if (!file_copy($file, $destination, FILE_EXISTS_REPLACE)) {
+      form_set_error('picture_upload', t("Failed to upload the picture image; the %directory directory doesn't exist or is not writable.", array('%directory' => variable_get('user_picture_path', 'pictures'))));
+    }
+    else {
+      user_save($user, array('picture' => file_directory_path() . '/' . $destination));
+    }
+  }
+}
+
+/**
+ * Newsletters need to be passed as comma separated list
+ */
+function ssos_client_v2_newsletters($form_values = array()) {
+  foreach ($form_values as $key => $value) {
+    if (substr($key, 0, 10) == 'newsletter') {
+      if ($value == 1) {
+        $newsletter['subscribe'] = substr(strrchr($key,'_'), 1) . ',' . $newsletter['subscribe'];
+      }
+      else {
+        $newsletter['unsubscribe'] = substr(strrchr($key,'_'), 1) . ',' . $newsletter['unsubscribe'];
+      }
+    }
+  }
+
+  return $newsletter;
+}
+
+/**
+ * Turn user object or user form values into unified array for post data
+ * This function may no longer be needed since we are only submitting form values
+ * not sending user object... THINK
+ */
+function ssos_client_v2_build_query($array = array()) {
+  $http_query = array();
+
+  foreach ($array as $key => $value) {
+    if (!$key)  $key = "none";    //  Otherwise Switch statement executes first case.
+    switch ($key) {
+      case 'pass':
+        $fields[] = $key;
+        $values[] = md5($value);
+        $s[] = "'%s'";
+        $http_query[$key] = $value;
+        break;
+      case 'state':
+        // $http_query['state'] = ssos_client_v2_state_name($value);
+        $http_query['state'] = $value;
+        break;
+      case 'dob':
+        $http_query['dob'] = $value['year'] . '-' . $value['month'] . '-' . $value['day'];
+        break;
+      default:
+        $http_query[$key] = $value;
+        break;
+    }
+  }
+  return $http_query;
+}
+
+/**
+ * NOT USED ANYMORE
+ * Takes a two char state abbration and turns it into full name and full case
+ *
+ * @param $state_abbr
+ * state abbration, like CA or IL
+ *
+ * @return
+ * Full state name in all caps like CALIFORNIA
+ */
+function ssos_client_v2_state_name($state_abbr) {
+  $listing = location_state_listings();
+  return strtoupper($listing[$state_abbr]);
+}
+
+/**
+ * Implementation of hook_user
+ *
+ */
+function ssos_client_v2_user($op, &$edit, &$account, $category = NULL) {
+  // remove the user information from authmap table to avoid error when user re-signs up
+  if ($op == 'delete') {
+    // db_query("DELETE FROM {authmap} WHERE uid = %d AND module = '%s'", array($account->uid, 'ssos_client_v2'));
+    // Drupal 7
+    $num_deleted = db_delete('authmap')
+       ->condition('uid', $account->uid)
+       ->condition('module', 'ssos_client_v2')
+       ->execute();
+ 
+ 
+    if (module_exists('user_profile')) {
+      db_query("DELETE FROM {user_profile_permissions} WHERE uid = %d", array($account->uid));
+    }
+  }
+
+  // Skip the user hook if 'external_registration_server' not set
+  if (!variable_get('external_registration_server', '')) {
+    return;
+  }
+
+  // user image has been updated notify auth server
+  if ($op == 'update' && isset($edit['picture'])) {
+    ssos_client_v2_update_picture($account->name, $edit['picture']);
+  }
+}
+
+/**
+ * Update authentication server with community user picture
+ */
+function ssos_client_v2_update_picture($name = '', $picture = '') {
+  global $conf;
+  if ($name && isset($picture)) {
+    $pid = variable_get('external_registration_partner_id', '40');
+    $time = $_SERVER['REQUEST_TIME'];
+    $fields = array(
+      'name'  => $name,
+      'pid'   => $pid,
+      'time'  => $time,      
+      'check' => _ssos_client_v2_check_cal($pid, $time, $name, NULL , NULL),
+      'picture_upload' => "@$picture",
+    );
+    $external_registration_server = variable_get('external_registration_server', 'http://www.mylifetime.com');
+    $url = $external_registration_server . "/registration/avatar";
+    $options = array(
+      CURLOPT_URL => $url,
+      CURLOPT_POST => 1,
+      CURLOPT_FOLLOWLOCATION => FALSE,
+      CURLOPT_RETURNTRANSFER => 1,
+      CURLOPT_POSTFIELDS => $fields,
+    );
+    $ch = curl_init();
+    curl_setopt_array($ch, $options);
+    $result = curl_exec($ch);
+    curl_close($ch);
+
+    // Replace bad characters  \x3c , \x3e and \x26
+    $result = str_replace(array('\x3c', '\x3e', '\x26'), array("<", ">", "&"), $result);
+    $result_decoded = json_decode($result, true);
+    
+    /*
+    if ($result_decoded['success']['messages']['status']) {
+      drupal_set_message(implode("\n", $result_decoded['success']['messages']['status']));
+    }
+    */
+
+    if ($result_decoded['error']['messages']['error']) {
+      drupal_set_message(implode("\n", $result_decoded['error']['messages']['error']), 'error');
+    }    
+   
+    
+    if (variable_get('ssos_client_v2_debug', FALSE)) {
+      $action = 'registration/avatar';
+      ssos_client_v2_debug(strtoupper($action), (print_r($fields, 1)), (print_r($result_decoded, 1)));
+    }
+  }
+}
+
+
+/**
+ * Implementation of hook_menu()
+ *
+ */
+function ssos_client_v2_menu() {
+  $items['edit'] = array(
+    'page callback' => 'ssos_client_v2_request_redirect',
+  );
+  return $items;  
+}
+
+function ssos_client_v2_request_redirect() {
+  // log the user in, all roles allowed because of password request
+  ssos_client_v2_cookie_login();
+  // we now have a user object to work with
+  global $user;
+  // send them to thier account edit page so they can update their password
+  drupal_goto('user/' . $user->name . '/edit/account');
+}
+ 
+/**
+ * Implementation of hook_menu_alter()
+ *
+ */
+function ssos_client_v2_menu_alter(&$callbacks) {
+  $callbacks['logout']['page callback'] = 'ssos_client_v2_user_logout';
+}
+
+/**
+ * Custom call to user_logout so we can reset a cookie
+ */
+function ssos_client_v2_user_logout($redirect = '') {
+  global $cookie_domain;
+  global $user;
+  global $conf;
+
+  if ($user->name) {
+    // make sure the correct cookie is being sent for logout
+    // $logout_cookie = ($_COOKIE[$conf['site_short_name']] != $_COOKIE['PHPSESSID']) ? $_COOKIE[$conf['site_short_name']] : $_COOKIE['PHPSESSID'];
+    $logout_cookie = $_COOKIE[session_name()];
+    // user is logging out on local site
+    // so we'll need to log them out on main site as well
+    $sessiondata = http_build_query(
+      array(
+        'name'  => $user->name,
+        'pid'   => variable_get('external_registration_partner_id', '40'),
+        'sid'   => $logout_cookie,
+        'login' => '0',
+      ), '', '&'
+    );
+    ssos_client_v2_post_data($sessiondata, 'identity/sessionlogin');
+    watchdog('user', 'Session closed for %name.', array('%name' => $user->name));
+ 
+    // Destroy the current session:
+    session_destroy();
+  
+  }
+  // Do this irrespective of $user state (even if session was dropped earlier
+  module_invoke_all('user', 'logout', $user, NULL);   // Fixed  04/13/2010
+  
+  // Destroy all cookies from previous session
+  $cookies = array(session_name(), $conf['site_short_name'] . 'status', 'loginstatus', 'lo', 'de', 'qa', 'co');
+  foreach ($cookies as $cookie) {
+    setcookie($cookie, '', time()-42000, '/', $cookie_domain);
+  }
+  // Load the anonymous user
+  $user = drupal_anonymous_user();
+
+  header("Cache-Control: no-cache-akami", FALSE);   // This one will add to the previous 'Cahce-Control' header
+  
+  drupal_goto($redirect? $redirect: /*$_GET['q']*/ '<front>');
+}
+
+/**
+ * Newsletters
+ */
+function _ltv_newsletters() {
+  $newsletters = array(
+    'newsletter_project_runway_39' => array(
+      'title' => 'Project Runway',
+      'description' => 'Wanna know who\'s in and who\'s out? Sign up now to get the latest "Project Runway" news, reviews, video, games and other exclusives.',
+      'type' => 'checkbox',
+    ),
+     'newsletter_army_wives_35' => array(
+      'title' => 'Army Wives',
+      'description' => 'Get everything you want to know about your favorite show. Sneak peeks, interviews with the stars, show updates and more!',
+      'type' => 'checkbox',
+    ),    
+    'newsletter_on_tv_15' => array(
+      'title' => 'On TV',
+      'description' => 'You won\'t miss a minute of our movies or shows if you sign up now. Subscribe to get reminders and extras on all of our programs.',
+      'type' => 'checkbox',
+    ),
+    'newsletter_sweepstakes_20' => array(
+      'title' => 'Sweepstakes',
+      'description' => 'Never miss your chance at cash and fabulous prizes! We\'ll let you know whenever we launch a new sweeps or contest.',
+      'type' => 'checkbox',
+    ),
+    'newsletter_games_19' => array(
+      'title' => 'Games',
+      'description' => 'Be the first to find out about all of our online and downloadable games, as well as what\'s happening on DressUp Challenge and Roiworld.',
+      'type' => 'checkbox',
+    ),
+    'newsletter_beauty_style_25' => array(
+      'title' => 'Beauty & Style',
+      'description' => 'Ready to look fabulous? You will be with helpful hints from our beauty and fashion experts.',
+      'type' => 'checkbox',
+    ),
+    'newsletter_astrology_21' => array(
+      'title' => 'Astrology',
+      'description' => 'Get this exclusive weekly planetary overview that\'s not available on the site. Plus you\'ll receive updates on new readings, giveaways, and much more.',
+      'type' => 'checkbox',
+    ),
+    'newsletter_lifetime_entertainment_28' => array(
+      'title' => 'Entertainment',
+      'description' => 'Want to be in the know about the latest must-watch movies, hottest music and more? Get the dish.',
+      'type' => 'checkbox',
+    ),
+    'newsletter_lifetime_updates_50' => array(
+      'title' => 'Lifetime Email Updates',
+      'description' => 'Get the latest on Lifetime special events, exclusive offers and more.',
+      'type' => 'checkbox',
+    ),
+    'newsletter_lifetime_moms_48' => array(
+      'title' => 'Lifetime Moms: The Daily Hot List',
+      'description' => 'Get daily updates on top stories about Family & Parenting, Money & Savings, Health & Wellness, and much more.',
+      'type' => 'checkbox',
+    ),
+    'newsletter_champs_22' => array(
+      'title' => 'My Lifetime Committment',
+      'description' => 'You can help improve women\'s lives! Get our action updates and alerts, and then get involved.',
+      'type' => 'checkbox',
+    ),
+    'newsletter_video_32' => array(
+      'title' => 'Video',
+      'description' => 'Want to know what movies and shows you can watch online? Be the first to know what new videos are available on myLifetime.com and vote for a movie you would like to see every month!',
+      'type' => 'checkbox',
+    ),    
+    'newsletter_dance_moms_53' => array(
+      'title' => 'Dance Moms',
+      'description' => 'Get the scoop on everything \'Dance Moms\'! From the latest episode news to the best video extras, we\'ve got you covered.',
+      'type' => 'checkbox',
+    ),
+    'newsletter_drop_dead_diva_54' => array(
+      'title' => 'Drop Dead Diva',
+      'description' => 'Need more \'Diva\'? Sign up today for the latest show updates, cast and creator Q&As, and much more!',
+      'type' => 'checkbox',
+    ),
+    
+    /*
+    'newsletter_caption_splash_37' => array(
+      'title' => 'Caption Splash Newsletter',
+      'description' => 'See who\'s dropping the funny on photos of celebs, Lifetime movies, pets and kids at Caption Splash. Get clever captions delivered to your desktop every morning!',
+      'type' => 'checkbox',
+    ),
+    'newsletter_community_46' => array(
+      'title' => 'Community Newsletter',
+      'description' => 'She said <i>what</i>? Check out the latest hot topics and connect with others in our community!',
+      'type' => 'checkbox',
+    ),
+    'newsletter_healthy_living_38' => array(
+      'title' => 'Healthy Living Newsletter',
+      'description' => 'Get tips, news and expert advice on everything related to health, diet and fitness.',
+      'type' => 'checkbox',
+    ), 
+    'newsletter_lifetime_insiders_47' => array(
+      'title' => 'Lifetime Insiders',
+      'description' => 'Are you a diehard Lifetime fan? Sign up to be the first to get the inside scoop and get special offers.',
+      'type' => 'checkbox',
+    ),
+    'newsletter_gigglerific_36' => array(
+      'title' => 'Gigglerific Newsletter',
+      'description' => 'Want a quick guide to the silliest, funniest, most popular stuff that\'s making waves on the Web? Sign up for the Gigglerific newsletter, and we\'ll send you the best finds that you\'ll want to forward to all your friends.',
+      'type' => 'checkbox',
+    ),
+    'newsletter_on_tv_mobile_7' => array(
+      'title' => 'Sign up for mobile alerts',
+      'type' => 'checkbox',
+      'attributes' => array('class' => 'mobile-alert'),
+      'suffix' => '</div>',
+    ),
+    'newsletter_sweepstakes_mobile_5' => array(
+      'title' => 'Sign up for mobile alerts',
+      'type' => 'checkbox',
+      'attributes' => array('class' => 'mobile-alert'),
+      'suffix' => '</div>',
+    ),
+    'newsletter_email_format' => array(
+      'title' => 'Preferred e-mail format',
+      'options' => array(t('HTML (Text and Images)'), t('Text Only')),
+      'type' => 'radios',
+      'attributes' => array('class' => 'container-inline'),
+    ),
+    'mobile_link' => array(
+      'type' => 'markup',
+      'value' => '<br/><a style="text-decoration:none; color:#000000; font-weight:bold;" href="http://www.mylifetime.com/fun-games/mobile/get-lifetime-on-your-mobile-phone">Get information on our mobile alerts</a>',
+    ),*/
+
+  );
+  
+  $form['newsletters'] = array(
+    '#title' => t('Select Newsletters'),
+    '#type' => 'fieldset',
+    '#weight' => 9,
+  );
+  
+  foreach($newsletters as $type => $definition) {
+    $form['newsletters'][$type] = array(
+      '#type' => $definition['type'],
+      '#title' => t($definition['title']),
+      '#description' => t($definition['description']),
+      '#options' => $definition['options'],
+      '#attributes' => $definition['attributes'],
+      '#prefix' => $definition['prefix'],
+      '#suffix' => $definition['suffix'],
+      );
+      if ($definition['value']) {
+        $form['newsletters'][$type]['#value'] = $definition['value'];
+    }
+    
+  }
+  return $form;
+}
+
+/**
+ * This is an internal function to generate the check_val verification value
+ * @param
+ *    in -- $pid, $time, $name, $uid, $sid
+ *              if $uid and/or $sid are '0' make them '' and not '0' so that it will not affect the check sum if absent
+ *   out -- $check_cal
+ */
+function _ssos_client_v2_check_cal($pid, $time, $name = '', $uid = '' , $sid = '') {
+
+  $site_key = variable_get(('site_key_' . $pid), 'tYf89raPbxwz');
+
+  $check_cal = hash_hmac('sha256', 
+               $pid . $time
+             . (($name) ? $name : '') 
+             . (($uid)  ? $uid  : '')
+             . (($sid)  ? $sid  : ''),
+               $site_key
+             );
+
+  return $check_cal;
+}
+
+/**
+ * DEBUG FUNCTION 
+ * in db.inc or settings.php add
+ * $conf['ssos_client_v2_debug'] = TRUE;
+ */
+function ssos_client_v2_debug($action = 'hook_init', $postdata = '', $response = '') {
+  global $cookie_domain;
+  global $conf;
+  
+  // If ssos_client_v2_debug set to '2' then place limited output in error_log
+  if (variable_get('ssos_client_v2_debug', FALSE) == 2) {
+     if ($action == 'hook_init') return;
+     ssos_client_v2_debug_error_log($action, $postdata, $response);
+     return;
+  }
+  
+  drupal_set_message("ACTION: " . $action);
+  drupal_set_message("POSTDATA: " . $postdata);
+  drupal_set_message("RESPONSE: " . $response);
+  drupal_set_message("COOKIE_DOMAIN: " . $cookie_domain);
+  drupal_set_message("SESSNAME: " . session_name());
+  drupal_set_message("COOKIE_ARRAY: " . print_r($_COOKIE, 1));
+  drupal_set_message("SESSNAME_id: " . $_COOKIE[session_name()]);
+  drupal_set_message(session_name() . ': ' . $_COOKIE[session_name()]);
+  drupal_set_message("loginstatus: " . $_COOKIE['loginstatus']);
+  drupal_set_message($conf['site_short_name'] . 'status: ' . $_COOKIE[$conf['site_short_name'] . 'status']);
+  drupal_set_message("---------------------------------------------------------------------------------------");
+}
+
+function ssos_client_v2_debug_error_log($action = 'hook_init', $postdata = '', $response = '') {
+  global $cookie_domain;
+  global $conf;
+  // Changed from drupal_set_message() to error_log() to see all messages
+  error_log("ACTION: " . $action);
+  error_log("POSTDATA: " . $postdata);
+  error_log("RESPONSE: " . $response);
+  error_log("COOKIE_DOMAIN: " . $cookie_domain);
+  error_log("SESSNAME: " . session_name());
+  // error_log("COOKIE_ARRAY: " . print_r($_COOKIE, 1));
+  error_log("SESSNAME_id: " . $_COOKIE[session_name()]);
+  error_log(session_name() . ': ' . $_COOKIE[session_name()]);
+  error_log("loginstatus: " . $_COOKIE['loginstatus']);
+  error_log($conf['site_short_name'] . 'status: ' . $_COOKIE[$conf['site_short_name'] . 'status']);
+  error_log("---------------------------------------------------------------------------------------");
+}
+
+

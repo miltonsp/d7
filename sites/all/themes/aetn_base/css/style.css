@@ -1,0 +1,68 @@
+body {
+  background:#F2F2F2 none repeat scroll 0 0;
+  font: 12px/20px Arial,Helvetica,sans-serif;
+  margin:0px;
+  padding:0px;
+}
+
+/*
+ * GENERIC =============================================================
+ */
+a {
+  color:#a10;
+  text-decoration:none;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  margin:0px; padding:0px;
+  font-weight:normal;
+  font-size:100%;
+}
+
+p {
+  margin:0em 0em 1em;
+}
+
+ul,
+li,
+dl,
+dt,
+dd {
+  border:0px; margin:0px; padding:0px; list-style:none;
+}
+
+ul.menu,
+ul.links,
+ul.links-menu,
+.item-list ul,
+ul.menu li,
+ul.links li,
+ul.links-menu li,
+.item-list ul li {
+  list-style:none; list-style-image:none; margin:0px; padding:0px;
+}
+  
+/**
+ * STATUS MESSAGES ====================================================
+ */
+div.console div#message div.messages {
+  border:1px solid #7AC142;
+  margin-bottom:1em;
+  padding:0.8em;
+  color:#55872E;
+  font-weight:bold;
+  background:#F1F8EB url(/sites/all/modules/custom/library/images/icons/accept.png) no-repeat 4px 10px;
+  padding-left:24px;
+  font-size:11px;
+}
+div.console div#message div.error {
+  border:1px solid #B30000;
+  color:#B30000;
+  background:#FFCCCC url(/sites/all/modules/custom/library/images/icons/error.png) no-repeat 4px 10px;
+}
+div.console div#message div.notice, 
+div.confirm_emails {
+  background:#FFF6BF url(/sites/all/modules/custom/library/images/icons/notice.png) no-repeat 4px 10px;
+  color:#514721;
+  border-color:#FFD324;
+}

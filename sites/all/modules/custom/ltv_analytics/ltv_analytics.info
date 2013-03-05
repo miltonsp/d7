@@ -1,0 +1,6 @@
+; $Id: ltv_analytics.info 130857 2012-02-17 16:12:16Z milton $
+name = LTV Analytics
+description = Provides functions for interfacing with Omniture
+version = 7.1
+package = LifetimeTV
+core = 7.x

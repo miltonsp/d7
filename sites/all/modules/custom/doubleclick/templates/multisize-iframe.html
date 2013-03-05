@@ -1,0 +1,23 @@
+<style> body { padding: 0px; margin: 0px; } </style>
+<script type="text/javascript">
+  if(document.location.search != undefined) {
+    var query_parts = document.location.search.substr(1).split('&');
+    var params = {};
+    var param = [];
+    for(var i = 0; i < query_parts.length; i++) {
+      param = query_parts[i].split('=', 2);
+      params[param[0]] = param[1];
+    }
+    // If document.domain is www.mylifetime.com and produces a permissions error try mylifetime.com
+    try {
+      var parentOrd = parent.Dart.ord;
+    } catch (err){
+      var domain = document.domain;
+      document.domain = domain.substring(domain.indexOf('.')+1);
+    }
+
+    if(params['path'] != undefined) {
+      document.write('<script id="ad_multisize" src="http://ad.doubleclick.net/adj/' + unescape(params['path']  + 'ord=' + parent.Dart.ord + '?') + '"></scr' + 'ipt>');
+    }
+  }
+</script>

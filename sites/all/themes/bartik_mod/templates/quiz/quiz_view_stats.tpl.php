@@ -1,0 +1,61 @@
+<div>
+AETV Quiz Start Page
+<br>
+</div>
+
+<?php
+
+  $node = $variables['node'];
+  // Fetch data
+  $stats = array(
+    array(
+      'title' => t('Questions'),
+      'data' => $node->number_of_questions,
+    ),
+  );
+  if ($node->show_attempt_stats) {
+    $takes = $node->takes == 0 ? t('Unlimited') : $node->takes;
+    $stats[] = array(
+      'title' => t('Attempts allowed'),
+      'data' => $takes,
+    );
+  }
+  if ($node->quiz_always) {
+    $stats[] = array(
+      'title' => t('Available'),
+      'data' => t('Always'),
+    );
+  }
+  else {
+    $stats[] = array(
+      'title' => t('Opens'),
+      'data' => format_date($node->quiz_open, 'short'),
+    );
+    $stats[] = array(
+      'title' => t('Closes'),
+      'data' => format_date($node->quiz_close, 'short'),
+    );
+  }
+  if (!empty($node->pass_rate)) {
+    $stats[] = array(
+      'title' => t('Pass rate'),
+      'data' => $node->pass_rate . ' %',
+    );
+  }
+  if (!empty($node->time_limit)) {
+    $stats[] = array(
+      'title' => t('Time limit'),
+      'data' => _quiz_format_duration($node->time_limit),
+    );
+  }
+  $stats[] = array(
+    'title' => t('Backwards navigation'),
+    'data' => $node->backwards_navigation ? t('Allowed') : t('Forbidden'),
+  );
+  // Format and output the data
+  $out = '<table id="quiz-view-table">' . "\n";
+  foreach ($stats as $stat) {
+    $out .= '<tr><td class="quiz-view-table-title"><strong>' . $stat['title'] . ':</strong></td><td class="quiz-view-table-data"><em>' . $stat['data'] . '</em></td></tr>' . "\n";
+  }
+  $out .= '</table>' . "\n";
+  print $out;

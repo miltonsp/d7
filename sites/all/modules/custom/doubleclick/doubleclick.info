@@ -1,0 +1,6 @@
+; $Id: doubleclick.info 130862 2012-02-17 16:22:40Z milton $
+name = DoubleClick
+description = Provide a DoubleClick-based ad implementation
+version = 7.1
+package = "LifetimeTV"
+core = 7.x
