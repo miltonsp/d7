@@ -1,0 +1,5 @@
+; $Id
+name = PPL Feeds
+description = "PPL Feeds"
+package = AETN Feeds
+core = 6.x

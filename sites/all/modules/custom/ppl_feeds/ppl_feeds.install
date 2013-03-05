@@ -1,0 +1,67 @@
+<?php
+
+function ppl_feeds_install() {
+  switch ($GLOBALS['db_type']) {
+    case 'mysql':
+    case 'mysqli':
+      // the {tablename} syntax is so multisite installs can add a
+      // prefix to the table name as set in the settings.php file
+      db_query("CREATE TABLE IF NOT EXISTS {ppl_feeds_program} (
+								  `id` int(10) unsigned NOT NULL auto_increment,
+								  `type` varchar(20) NOT NULL,
+								  `networkid` tinyint NOT NULL,
+								  `show_code` varchar(20) NOT NULL,
+								  `eps_id` int(11) NOT NULL,
+								  `title` varchar(200) NOT NULL,
+								  `teaser` tinytext,
+								  `year` smallint, 
+								  `body` text,
+								  `genre` varchar(25),
+								  `rating` varchar(25),
+								  `cast` tinytext,
+								  `xml` text NOT NULL,
+								  `date_imported` timestamp NOT NULL default CURRENT_TIMESTAMP on update CURRENT_TIMESTAMP,
+								  PRIMARY KEY  (`id`),
+								  KEY `show_code` (`show_code`),
+								  KEY `type` (`type`)
+								) ENGINE=MyISAM  DEFAULT CHARSET=latin1;
+
+                CREATE TABLE IF NOT EXISTS {ppl_feeds_schedule} (
+								  `id` int(10) unsigned NOT NULL auto_increment,
+								  `title` varchar(50) NOT NULL,
+								  `episode` varchar(50) NOT NULL,
+								  `networkid` tinyint NOT NULL,
+								  `body` text NOT NULL,
+								  `show_code` varchar(20) NOT NULL,
+								  `eps_id` int(11) NOT NULL default '0',
+								  `airdate` datetime NOT NULL,
+								  `airexact` datetime NOT NULL,
+								  `duration` int(11) NOT NULL default '0',
+								  `rating` varchar(20) NOT NULL,
+								  `closed_caption` varchar(20) NOT NULL,
+								  `audio_sap` varchar(20) NOT NULL,
+								  `audio_format` varchar(50) NOT NULL,
+								  PRIMARY KEY  (`id`),
+								  KEY `show_code` (`show_code`,`eps_id`,`airdate`,`airexact`),
+								  KEY `airdate` (`airdate`)
+								) ENGINE=MyISAM  DEFAULT CHARSET=latin1;
+              ");
+      break;
+
+    case 'pgsql':
+  }
+}
+
+/**
+ * Update to the updated schema
+ * Add program_id
+ *
+ */
+function ppl_feeds_update_6001(&$sandbox = NULL){
+  $ret = array();
+  db_add_field($ret, 'ppl_feeds_schedule', 'program_id', array('description' =>'Identifier from PPL', 'type' => 'int', 'length' => '11', 'not null' => TRUE, 'default' => 0));
+  db_add_field($ret, 'ppl_feeds_program',  'program_id', array('description' =>'Identifier from PPL', 'type' => 'int', 'length' => '11', 'not null' => TRUE, 'default' => 0));
+  db_add_index($ret, 'ppl_feeds_schedule', 'program_id', array('program_id'));
+  db_add_index($ret, 'ppl_feeds_program',  'program_id', array('program_id'));
+  return $ret;
+}

@@ -1,0 +1,173 @@
+.ppl_feeds .feed_info {
+  font: 20px bold;
+  text-align: center;
+}
+
+.ppl_feeds .list_row .item {
+  padding: 5px;
+  float: left;
+}
+
+.ppl_feeds .listAllShowcodes .list_row {
+	clear: both;
+}
+
+.ppl_feeds .listAllShowcodes .list_row .title {
+	float: left;
+}
+
+.ppl_feeds .listAllShowcodes .list_row .show_code {
+  float: left;
+}
+
+.ppl_feeds .listByShowcode .list_row {
+  clear: both;
+}
+
+.ppl_feeds .listByShowcode .list_header{
+    border: 2px solid green;
+    font-weight: bold;
+    padding: 0px 0px 30px 0px;
+    clear: both;
+}
+
+
+.ppl_feeds .listByShowcode .list_row .title {
+  float: left;
+}
+
+.ppl_feeds .listByShowcode .list_row .show_code {
+  float: left;
+}
+
+.ppl_feeds .listByShowcode .list_row .program_id {
+  float: left;
+  width: 80px;
+}
+
+.ppl_feeds .listByShowcode .list_row .network {
+  float: left;
+}
+
+.ppl_feeds .listByShowcode .list_row .airdate {
+  float: left;
+  width: 140px;
+}
+
+.ppl_feeds .listByShowcode .list_header .airdate {
+  float: left;
+  width: 124px;
+}
+
+.ppl_feeds .listByShowcode .list_row .duration {
+  float: left;
+  width: 60px;
+}
+
+.ppl_feeds .listByShowcode .list_row .rating {
+  float: left;
+}
+
+.ppl_feeds .listByShowcode .list_header .rating {
+  float: left;
+  width: 55px;
+}
+
+.ppl_feeds .listByShowcode .list_row .closed_caption {
+  float: left;
+}
+
+
+.ppl_feeds .searchbox {
+	border: 1px solid blue;
+	margin: 5px;
+	height: 33px;
+	width: 780px;
+}
+
+.ppl_feeds .searchbox .item {
+	float: left;
+	margin: 5px;
+}
+
+.ppl_feeds .searchbox .search {
+	background: AliceBlue;
+	font-weight: bold;
+	width: 80px;
+	text-align: center;
+	border: 1px solid black;
+}
+
+.ppl_feeds .searchbox .clear_search {
+  width: 100px;
+  text-align: center;
+  border: 1px solid black;
+}
+
+.ppl_feeds .listAllPrograms {
+	width: 1040px;
+}
+
+.ppl_feeds .listAllPrograms .list_row {
+  clear: both;
+}
+
+.ppl_feeds .listAllPrograms .list_header{
+    border: 2px solid green;
+    font-weight: bold;
+    padding: 0px 0px 30px 0px;
+    clear: both;
+}
+
+.ppl_feeds .listAllPrograms .list_row .item {
+  padding: 5px;
+  float: left;
+  margin: 1px;
+  width: 120px;
+}
+
+.ppl_feeds .listAllPrograms .list_row .type {
+  width: 60px;
+}
+
+.ppl_feeds .listAllPrograms .list_row .title {
+  width: 300px;
+}
+
+.ppl_feeds .listAllPrograms .list_row .show_code {
+  width: 80px;
+}
+
+.ppl_feeds .listAllPrograms .list_row .year {
+  width: 30px;
+}
+
+.ppl_feeds .listAllPrograms .list_row .program_id {
+  width: 90px;
+}
+
+.ppl_feeds .listAllPrograms .list_row .eps_id {
+  width: 60px;
+}
+
+.ppl_feeds .listAllPrograms .list_row .networkid {
+  width: 60px;
+}
+
+.ppl_feeds .listAllPrograms .list_row .import {
+  border: 1px solid;
+  text-align: center;
+  width: 100px;
+}
+
+.ppl_feeds .listAllPrograms .list_row .import_me {
+  font-weight: bold;
+}
+
+.ppl_feeds .listAllPrograms .list_row .imported {
+	border: 2px solid green;
+}
+input#search {
+  border:1px solid #CCCCCC; 
+  background:#ffffff;
+}

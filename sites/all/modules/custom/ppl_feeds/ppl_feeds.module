@@ -1,0 +1,476 @@
+<?php
+/**
+ * Implementation of hook_menu().
+ */
+function ppl_feeds_menu() {
+  $items = array();
+  
+  $items['admin/settings/ppl_feeds'] = array(
+    'title' => 'Ltv Feeds',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('ppl_feeds_feed_admin'),
+    'description' => 'Schedule  Feeds Settings.',
+    'access arguments' => array('administer schedule'),
+    'file' => 'ppl_feeds.admin.inc',
+  );
+  
+  $items['admin/settings/ppl_feeds/feeds'] = array(
+    'title' => 'Schedule Feed Settings',
+    'description' => 'Schedule Feeds Settings.',
+    'type' => MENU_DEFAULT_LOCAL_TASK,
+    'weight' => -10,
+  );
+  
+    $items['admin/settings/ppl_feeds/report'] = array(
+    'title' => 'Schedule Feed Reports',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('ppl_feeds_reports_admin'),
+    'description' => 'Schedule Feed Reports.',
+    'access arguments' => array('administer schedule'),
+    'type' => MENU_LOCAL_TASK,
+    'file' => 'ppl_feeds.admin.inc',
+    'weight' => -5,
+  );
+  
+  $items['admin/settings/ppl_feeds/actions'] = array(
+    'title' => 'Schedule Feed Actions',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('ppl_feeds_actions_admin'), 
+    'description' => 'Schedule Feed Actions.',
+    'access arguments' => array('administer schedule'),
+    'type' => MENU_LOCAL_TASK,
+    'file' => 'ppl_feeds.admin.inc',
+  );
+  
+  
+  $items['admin/settings/ppl_feeds/shows/list/%ppl_feeds'] = array(
+    'title' => 'MyLT Schedule List by Showcode',
+    'description' => 'MyLT Schedule List by Showcode',
+    'page callback' => 'ppl_feeds_list_by_showcode',
+    'page arguments' => array(5),
+    'access arguments' => array('administer schedule'),
+    'type' => MENU_NORMAL_ITEM,
+    'file' => 'ppl_feeds.admin.inc',
+  );
+  
+  $items['admin/settings/ppl_feeds/shows/list/get_input'] = array(
+    'title' => 'MyLT Schedule getInput',
+    'description' => 'MyLT Schedule getInput',
+    'page callback' => 'ppl_feeds_shows_get_input',
+    'access callback' => TRUE, 
+    'access arguments' => array('administer schedule'),
+    'type' => MENU_CALLBACK,
+    'file' => 'ppl_feeds.admin.inc',
+  );
+  
+  $items['admin/settings/ppl_feeds/shows/list/save_input'] = array(
+    'title' => 'MyLT Schedule saveInput',
+    'description' => 'MyLT Schedule saveInput',
+    'page callback' => 'ppl_feeds_shows_save_input',
+    'access callback' => TRUE, 
+    'access arguments' => array('administer schedule'),
+    'type' => MENU_CALLBACK,
+    'file' => 'ppl_feeds.admin.inc',
+  );
+  
+  $items['admin/settings/ppl_feeds/programs/list/%ppl_feeds'] = array(
+    'title' => 'MyLT Program List by Program',
+    'description' => 'MyLT Program List by Program',
+    'page callback' => 'ppl_feeds_list_by_program',
+    'page arguments' => array(5),
+    'access arguments' => array('administer programs'),
+    'type' => MENU_NORMAL_ITEM,
+    'file' => 'ppl_feeds.admin.inc',
+  );
+  
+  $items['admin/settings/ppl_feeds/programs/list/search'] = array(
+    'title' => 'MyLT Program getInput',
+    'description' => 'MyLT Program getInput',
+    'page callback' => 'ppl_feeds_program_search',
+    'access callback' => TRUE, 
+    'access arguments' => array('administer programs'),
+    'type' => MENU_CALLBACK,
+    'file' => 'ppl_feeds.admin.inc',
+  );
+  
+  $items['admin/settings/ppl_feeds/programs/list/import'] = array(
+    'title' => 'MyLT Program getInput',
+    'description' => 'MyLT Program getInput',
+    'page callback' => 'ppl_feeds_program_import',
+    'access callback' => TRUE, 
+    'access arguments' => array('administer programs'),
+    'type' => MENU_CALLBACK,
+    'file' => 'ppl_feeds.admin.inc',
+  );
+  
+    $items['ppl_feeds/test'] = array(
+    'title' => 'ppl_feedst Test',
+    'description' => 'ppl_feeds Test',
+    'page callback' => 'ppl_feeds_test',
+    'access callback' => TRUE, 
+    'access' => TRUE,
+    'type' => MENU_CALLBACK,
+  );
+  
+  return $items;
+}
+
+
+/**
+ * Implementation of hook_load().
+ */
+function ppl_feeds_load($data) {
+	if(!$data) {
+		return true;
+	}
+	
+	return $data;
+}
+
+/**
+ * Implementation of hook_perm().
+ */
+function ppl_feeds_perm() {
+  return array('administer schedule', 'edit schedule', 'administer programs');
+}
+
+/*
+ * system for getting local objects
+ */
+function ppl_feeds_get_object($object=null, $type='model', $params=null) {
+  static $setObject = false;
+  
+  if(!$setObject[$type.$object]) {
+    require_once drupal_get_path('module', 'ppl_feeds') .'/'.$type.'s/'.$object.'.inc';
+
+    $objectName = $type.ucfirst($object);
+  
+    if($params) {
+      $setObject[$type.$object] = new $objectName($params);
+    } else {
+      $setObject[$type.$object] = new $objectName();
+    }
+  }
+  
+  return $setObject[$type.$object];
+}
+
+function ppl_feeds_get_settings() {
+  static $out = array();
+  
+  if(sizeof($out)>=1) {
+  	return $out;
+  }
+  
+	//defaults
+  $networks = array(
+                     'ltv'=>1,    
+                     'lmn'=>2,
+                     'lrw'=>3,
+                   );
+                           
+  //  Different numbering scheme for PPL
+  $ppl_networks = array(
+                     'ltv'=>10,    // Different ids for PPL   1,2,3  =>  10,11,12
+                     'lmn'=>11,
+                     'lrw'=>12,
+                   );
+
+  $network_default = 'ltv';
+  
+  $feed_schedule = array (
+                           'url' => 'http://prod2.aewebsvc.com/programming.asmx',   // old 'http://nyciistest.corp.lifetimetv.info/ProgramsWS-TEST/Programs.asmx',
+                           'call' => 'GetSchedule',
+                         );
+  
+  $feed_program = array (
+			   'url' => 'http://prod2.aewebsvc.com/programming.asmx', // old 'http://nyciistest.corp.lifetimetv.info/ProgramsWS-TEST/Programs.asmx',
+			   'call' => 'GetPrograms',
+										    );
+                        
+  if($new_networks = variable_get('ppl_feeds_networks', false)) {
+    $out['networks'] = unserialize($new_networks);
+  } else {
+    $out['networks'] = $networks;
+  }
+   
+  if($new_networks = variable_get('ppl_feeds_ppl_networks', false)) {
+    $out['ppl_networks'] = unserialize($new_networks);
+  } else {
+    $out['ppl_networks'] = $ppl_networks;
+  }
+
+
+  $out['network_default'] = variable_get('ppl_feeds_network_default', $network_default);
+  
+  $new_feed_schedule = variable_get('ppl_feeds_feed_schedule', false);
+  $new_feed_program = variable_get('ppl_feeds_feed_program', false);
+  
+  
+  $out['feed'] = array();
+  if ($new_feed_schedule) {
+    $out['feed']['schedule'] = unserialize($new_feed_schedule);
+  } else {
+    $out['feed']['schedule'] = $feed_schedule;
+  }
+  
+  if ($new_feed_program) {
+    $out['feed']['program'] = unserialize($new_feed_program);
+  } else {
+    $out['feed']['program'] = $feed_program;
+  }
+  
+    
+  return $out;
+}
+
+/**
+ * Implementation of hook_theme().
+ */
+function ppl_feeds_theme() {
+//most likely depricated
+	return array(
+    'ppl_feeds_view' => array(
+      'arguments' => array('prog', 'alt'),
+    ),
+    'ppl_feeds_listAllShowcodes' =>array(
+      'arguments' => array('data'),
+    ),
+    'ppl_feeds_listByShowcode' =>array(
+      'arguments' => array('data'),
+    ),
+    'ppl_feeds_listAllPrograms' =>array(
+      'arguments' => array('data'),
+    ),
+    'ppl_feeds_listByPrograms' =>array(
+      'arguments' => array('data'),
+    ),
+  );
+}
+
+/**
+ * Implementation of hook_cron().
+ */
+function ppl_feeds_cron($internal = FALSE) {
+
+  if (!$internal) {
+    $checked      = variable_get('on_tv_feed_schedule_checked', strtotime("-1 month")); //defaults to the last month
+    $differential = variable_get('on_tv_feed_differential', 5.8 * 60 * 60); //defaults to 6 hours differential
+    // don't perform update if less than $differential (6) have passed since last run
+    if (time() < $checked + $differential) {
+    	return;
+    }
+  }	
+
+  //init models
+  $modelScheduleSystem = ppl_feeds_get_object('scheduleSystem', 'model');
+  $modelProgramSystem = ppl_feeds_get_object('programSystem', 'model');
+  
+  //get settings
+  $settings = ppl_feeds_get_settings();
+    
+  foreach($settings['networks'] as $network => $id) {
+
+    // debug
+    error_log("From ppl_feeds.module Schedule sync (line 274) \$network: " . print_r($network, 1));
+
+    if ($internal) {
+      drupal_set_message("From ppl_feeds.module Schedule sync on \$network: " . print_r($network, 1));
+    }
+
+    //sync schedule
+    $modelScheduleSystem->sync($network);
+
+    // debug
+    error_log("From ppl_feeds.module Program sync (line 243) \$network: " . print_r($network, 1));
+
+    if ($internal) {
+      drupal_set_message("From ppl_feeds.module Program sync on \$network: " . print_r($network, 1));
+    }
+
+    
+    //sync programs
+    $modelProgramSystem->sync($network);
+  }
+}
+
+/**
+ * Test Functions
+ */
+
+function ppl_feeds_test() {
+	
+	$node = node_load(1925);
+	
+	// print_r($node); die();
+
+	
+	$vocabulary = taxonomy_get_vocabularies('movie');
+	
+	$terms = taxonomy_get_tree(1);
+	
+	// print_r($terms);
+	
+	// die();
+	
+	
+	ppl_feeds_test_program();
+
+	ppl_feeds_test_schedule();
+
+}
+
+function ppl_feeds_test_program() {
+	$modelProgramSystem = ppl_feeds_get_object('programSystem', 'model');
+  
+	// $network = $modelProgramSystem->idToNetworkName(1);
+	
+  $data = $modelProgramSystem->sync('lrw');
+    
+  print_r($data);
+  
+  return;
+}
+
+/*
+ * ppl_feeds_get_schedule_for_showcode() function
+ * Get Schedule for Show Code
+ * 
+ * @author Eric Spector <Eric.Spector@aetn.com> 
+ * @access  public
+ * 
+ * @param $showcode String Optional show code
+ * @param $futureOnly Bool Show future only
+ * 
+ * @return Array Info data
+ * 
+ */
+function ppl_feeds_get_schedule_for_showcode($showcode = false, $futureOnly = true) {
+	$modelScheduleSystem = ppl_feeds_get_object('scheduleSystem', 'model');
+  
+  $data = $modelScheduleSystem->getScheduleForShowCode($showcode, $futureOnly);
+  
+  return $data;
+}
+
+function ppl_feeds_test_schedule() {
+	$modelScheduleSystem = ppl_feeds_get_object('scheduleSystem', 'model');
+  
+  $data = $modelScheduleSystem->sync('ltv');
+
+//	$data = $modelScheduleSystem->getScheduleForShowCode('FRAS 9404');
+  
+  print_r($data);
+}
+
+/**
+ * END OF Test Functions
+ */
+
+
+/**
+* Implementation of theme_()
+*
+* Formats List by Showcode output
+*
+* @param $data
+*   Object of program data
+* @return
+*   Output content to be displayed
+*/
+function theme_ppl_feeds_listByShowcode($data) {
+	static $path = false;
+  
+  if(!$path) {
+    $path = drupal_get_path('module', 'ppl_feeds');
+  }
+  
+  drupal_add_css($path.'/css/admin.css');
+  drupal_add_js($path.'/js/admin.js');
+  
+  $out = '';
+  
+  $out .= '<div class="listByShowcode">';
+  
+  //  Output field names header
+  $out .= theme_render_template($path.'/templates/admin.listByShowcode.header.tpl.php', array());
+  
+  //theme_render_template
+  foreach($data as $row) {
+    $out .= theme_render_template($path.'/templates/admin.listByShowcode.row.tpl.php', $row);
+  }
+  $out .= '</div>';
+  
+  return $out;
+}
+
+/**
+* Implementation of theme_()
+*
+* Formats List All Showcodes output
+*
+* @param $data
+*   Object of program data
+* @return
+*   Output content to be displayed
+*/
+function theme_ppl_feeds_listAllShowcodes($data) {
+	static $path = false;
+	
+	if(!$path) {
+		$path = drupal_get_path('module', 'ppl_feeds');
+	}
+	
+	drupal_add_css($path.'/css/admin.css');
+	
+	$out = '';
+
+	$out .= '<div class="listAllShowcodes">';
+	
+	//theme_render_template
+	foreach($data as $row) {
+		$out .= theme_render_template($path.'/templates/admin.listAllShowcodes.row.tpl.php', $row);
+	}
+	$out .= '</div>';
+	
+	return $out;
+}
+
+/**
+* Implementation of theme_()
+*
+* Formats List All Programs output
+*
+* @param $data
+*   Object of program data
+* @return
+*   Output content to be displayed
+*/
+function theme_ppl_feeds_listAllPrograms($data) {
+	static $path = false;
+  
+  if(!$path) {
+    $path = drupal_get_path('module', 'ppl_feeds');
+  }
+  
+  //drupal_add_css($path.'/css/admin.css');
+  print '<link type="text/css" rel="stylesheet" media="all" href="'.base_path().'/sites/mylifetime.com/modules/custom/ppl_feeds/css/admin.css" />';
+  drupal_add_js($path.'/js/admin.js');
+  
+  $out = '<div class="feed_info">Feed Movie List</div>';
+  
+  $out .= theme_render_template($path.'/templates/admin.listAllPrograms.searchbox.tpl.php', array());
+  
+  $out .= '<div class="listAllPrograms">';  
+  
+  //  Output field names header
+  $out .= theme_render_template($path.'/templates/admin.listAllPrograms.header.tpl.php', array());
+  
+  //theme_render_template
+  foreach($data as $row) {
+    $out .= theme_render_template($path.'/templates/admin.listAllPrograms.row.tpl.php', $row);
+  }
+  $out .= '</div>';
+  
+  return $out;
+}
